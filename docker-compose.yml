@@ -1,0 +1,20 @@
+name: backup-orchestrator
+services:
+  orchestrator:
+    container_name: backup-orchestrator
+    restart: unless-stopped
+    env_file:
+      - .env
+    networks:
+      - backups_net
+    volumes:
+      - ./config:/app/config     # tus .conf y settings del orquestador
+      - ./data:/app/data         # logs, estados, historial (archivos, no DB)
+      - ./tmp:/app/tmp           # buffer temporal (opcional)
+      - rclone_config:/root/.config/rclone  # tokens/remote de rclone
+networks:
+  backups_net:
+    name: backups_net
+    driver: bridge
+volumes:
+  rclone_config:
