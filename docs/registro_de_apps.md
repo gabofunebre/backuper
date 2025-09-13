@@ -1,13 +1,16 @@
 # Registro de aplicaciones y ejecución de respaldos
 
-Esta guía resume cómo integrar una aplicación con el orquestador de respaldos.
-Incluye el flujo de registro, parámetros requeridos, endpoints y buenas
-prácticas para preparar el contenedor de cada app.
+Esta guía complementa las instrucciones generales del
+[README](../README.md) y resume cómo integrar una aplicación con el
+orquestador de respaldos. Incluye el flujo de registro, parámetros
+requeridos, endpoints y buenas prácticas para preparar el contenedor de
+cada app.
 
 ## Flujo de registro
 
 1. **Preparar el contenedor de la app**
-   - Conéctalo a la red `backups_net`.
+   - Conéctalo a la red `backups_net` (ver
+     [instrucciones](../README.md#11-conectar-una-app-existente-a-backups_net)).
    - Exponé los endpoints internos `GET /backup/capabilities` y
      `POST /backup/export`, protegidos con un token.
    - Montá como _read-only_ las rutas de datos necesarias para generar el
@@ -40,6 +43,8 @@ prácticas para preparar el contenedor de cada app.
      ```json
      { "id": "mi-app", "status": "registered" }
      ```
+   - También se puede registrar desde la interfaz web como se describe en el
+     [README](../README.md#7-registrar-una-app-en-la-ui).
 
 3. **Ejecutar un respaldo manual**
    - Endpoint: `POST /api/apps/mi-app/backups`

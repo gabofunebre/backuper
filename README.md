@@ -69,19 +69,11 @@ docker exec -it backup-orchestrator rclone lsd gdrive:
 ```
 
 ## 6) Contrato v1 para las Apps
-Cada app que quiera respaldo:
-- Se **conecta a `backups_net`** en su propio compose (o `docker network connect`).
-- Expone un endpoint **solo interno** (escuchando en su contenedor) con **token**.
-
-Endpoints mínimos:
-- `GET /backup/capabilities` → JSON: `{ "version":"v1", "types":["db"], "est_seconds":123, "est_size": 104857600 }`
-- `POST /backup/export` → **stream** del backup (p.ej. `pg_dump -Fc`), con headers:
-  - `X-Checksum-SHA256: ...`
-  - `X-Size: <bytes>`
-  - `X-Format: pg_dump_Fc`
-  - Auth por header `Authorization: Bearer <TOKEN>`
-
-> Si el backup tarda mucho, la app puede devolver `202` con `job_id` y un `status_url`/`download` para que el orquestador lo consulte y descargue luego.
+Cada app que quiera respaldo debe conectarse a `backups_net` y exponer los
+endpoints internos `GET /backup/capabilities` y `POST /backup/export`,
+protegidos con token. La especificación completa, incluidos headers
+obligatorios y comportamiento asíncrono opcional, está en el
+[apartado de endpoints del registro de apps](docs/registro_de_apps.md#endpoints-que-debe-exponer-cada-app).
 
 ## 7) Registrar una App en la UI
 En **Apps → Agregar**:
@@ -94,8 +86,8 @@ En **Apps → Agregar**:
 Luego, **Probar ahora**. Deberías ver un archivo `NOMBRE_YYYYmmdd_HHMM.dump` en la carpeta de Drive.
 
 Para un detalle del flujo de registro vía API, ejemplos de peticiones HTTP y
-buenas prácticas de preparación de contenedores, ver
-[docs/registro_de_apps.md](docs/registro_de_apps.md).
+buenas prácticas de preparación de contenedores, ver el
+[Flujo de registro](docs/registro_de_apps.md#flujo-de-registro).
 
 ## 8) Política de retención
 Configurable por app. Ejemplo:
