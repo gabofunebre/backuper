@@ -1,5 +1,4 @@
 import importlib
-
 import pytest
 
 
@@ -8,6 +7,10 @@ def client(monkeypatch, tmp_path):
     db_path = tmp_path / "test.db"
     monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_path}")
     from orchestrator import app as app_module
+    from orchestrator.app import database as db_module
+    from orchestrator.app import models as models_module
+    importlib.reload(db_module)
+    importlib.reload(models_module)
     importlib.reload(app_module)
     monkeypatch.setattr(app_module, "start_scheduler", lambda: None)
     monkeypatch.setattr(app_module, "schedule_app_backups", lambda: None)

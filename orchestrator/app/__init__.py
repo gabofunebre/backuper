@@ -1,4 +1,5 @@
 import os
+import subprocess
 from flask import Flask, render_template, request, jsonify
 from dotenv import load_dotenv
 from sqlalchemy import inspect, text
@@ -49,6 +50,15 @@ def create_app() -> Flask:
                 for a in apps
             ])
 
+    @app.get("/rclone/remotes")
+    def list_rclone_remotes() -> list[str]:
+        """Return available rclone remotes."""
+        result = subprocess.run(
+            ["rclone", "listremotes"], capture_output=True, text=True, check=True
+        )
+        remotes = [r.strip().rstrip(":") for r in result.stdout.splitlines() if r.strip()]
+        return jsonify(remotes)
+
     @app.post("/apps")
     def register_app() -> tuple[dict, int]:
         """Register a new app from JSON payload."""
@@ -61,13 +71,22 @@ def create_app() -> Flask:
                 CronTrigger.from_crontab(schedule)
             except ValueError:
                 return {"error": "invalid schedule"}, 400
+        remote = data.get("rclone_remote")
+        if remote:
+            result = subprocess.run(
+                ["rclone", "listremotes"], capture_output=True, text=True, check=True
+            )
+            available = [r.strip() for r in result.stdout.splitlines() if r.strip()]
+            normalized = remote if remote.endswith(":") else f"{remote}:"
+            if normalized not in available:
+                return {"error": "unknown rclone remote"}, 400
         new_app = App(
             name=data.get("name"),
             url=data.get("url"),
             token=data.get("token"),
             schedule=schedule,
             drive_folder_id=data.get("drive_folder_id"),
-            rclone_remote=data.get("rclone_remote"),
+            rclone_remote=remote,
             retention=data.get("retention"),
         )
         with SessionLocal() as db:

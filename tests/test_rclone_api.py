@@ -1,0 +1,63 @@
+import os
+import sys
+import subprocess
+import importlib
+import pytest
+
+sys.path.append(os.path.dirname(os.path.dirname(__file__)))
+
+
+@pytest.fixture
+def app(monkeypatch):
+    monkeypatch.setenv("DATABASE_URL", "sqlite://")
+    app_module = importlib.import_module("orchestrator.app")
+    db_module = importlib.import_module("orchestrator.app.database")
+    models_module = importlib.import_module("orchestrator.app.models")
+    importlib.reload(db_module)
+    importlib.reload(models_module)
+    importlib.reload(app_module)
+    monkeypatch.setattr(app_module, "start_scheduler", lambda: None)
+    monkeypatch.setattr(app_module, "schedule_app_backups", lambda: None)
+    app = app_module.create_app()
+    app.config.update(TESTING=True)
+    yield app
+
+
+def test_list_rclone_remotes(monkeypatch, app):
+    calls = []
+
+    class DummyResult:
+        stdout = "gdrive:\nother:\n"
+
+    def fake_run(cmd, capture_output, text, check):
+        calls.append(cmd)
+        return DummyResult()
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    client = app.test_client()
+    resp = client.get("/rclone/remotes")
+    assert resp.status_code == 200
+    assert resp.get_json() == ["gdrive", "other"]
+    assert calls == [["rclone", "listremotes"]]
+
+
+def test_register_app_with_remote(monkeypatch, app):
+    def fake_run(cmd, capture_output, text, check):
+        class DummyResult:
+            stdout = "gdrive:\n"
+        return DummyResult()
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    client = app.test_client()
+    payload = {
+        "name": "remoteapp",
+        "url": "http://remoteapp",
+        "token": "tok",
+        "rclone_remote": "gdrive:",
+    }
+    resp = client.post("/apps", json=payload)
+    assert resp.status_code == 201
+    resp = client.get("/apps")
+    assert resp.status_code == 200
+    apps = resp.get_json()
+    assert any(a["name"] == "remoteapp" and a["rclone_remote"] == "gdrive:" for a in apps)

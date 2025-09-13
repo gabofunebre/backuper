@@ -69,14 +69,20 @@ docker exec -it backup-orchestrator rclone config
 docker exec -it backup-orchestrator rclone lsd gdrive:
 ```
 
-## 6) Contrato v1 para las Apps
+## 6) Configurar rclone desde la UI
+Si preferís evitar la consola, la interfaz web incluye una sección para inicializar y ver los remotes de rclone.
+- Ingresá a **Rclone → Configurar** desde la UI.
+- Allí se ejecuta el asistente `rclone config` y podés listar los remotes disponibles (`/rclone/remotes`).
+- La configuración se guarda en el volumen `rclone_config`.
+
+## 7) Contrato v1 para las Apps
 Cada app que quiera respaldo debe conectarse a `backups_net` y exponer los
 endpoints internos `GET /backup/capabilities` y `POST /backup/export`,
 protegidos con token. La especificación completa, incluidos headers
 obligatorios y comportamiento asíncrono opcional, está en el
 [apartado de endpoints del registro de apps](docs/registro_de_apps.md#endpoints-que-debe-exponer-cada-app).
 
-## 7) Registrar una App en la UI
+## 8) Registrar una App en la UI
 En **Apps → Agregar**:
 - **Nombre** (identificador).
 - **URL interna**: `http://NOMBRE_DEL_CONTENEDOR:PUERTO` (gracias a `backups_net`).
@@ -91,7 +97,7 @@ Para un detalle del flujo de registro vía API, ejemplos de peticiones HTTP y
 buenas prácticas de preparación de contenedores, ver el
 [Flujo de registro](docs/registro_de_apps.md#flujo-de-registro).
 
-## 8) Política de retención
+## 9) Política de retención
 Configurable por app. Ejemplo:
 - **Diarios**: 7
 - **Semanales**: 4
@@ -99,12 +105,12 @@ Configurable por app. Ejemplo:
 
 El orquestador borra lo que exceda en Drive y su índice interno.
 
-## 9) Seguridad
+## 10) Seguridad
 - El endpoint `/backup` de la app solo debe aceptar desde **`backups_net`** + **Bearer token**.
 - No loguear secretos. Rotar tokens si hace falta.
 - Límite de tamaño y **timeout** en el orquestador (ver `.env`).
 
-## 10) Restauración (prueba periódica)
+## 11) Restauración (prueba periódica)
 - Bajá un backup desde Drive.
 - Restaurá en un contenedor de prueba:
   ```bash
@@ -112,7 +118,7 @@ El orquestador borra lo que exceda en Drive y su índice interno.
   ```
 - Verificá integridad básica (tablas/filas claves).
 
-## 11) Conectar una App existente a `backups_net`
+## 12) Conectar una App existente a `backups_net`
 En su `docker-compose.yml`:
 ```yaml
 networks:
@@ -129,7 +135,7 @@ services:
 ```
 La app responderá internamente en `http://mi-app:PUERTO`.
 
-## 12) Flujo de ejecución (resumen)
+## 13) Flujo de ejecución (resumen)
 1. Scheduler dispara tarea de una app.
 2. Orquestador pide `GET /backup/capabilities`.
 3. Llama `POST /backup/export` (stream).
