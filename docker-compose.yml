@@ -13,5 +13,5 @@ networks:
   backups_net:
     driver: bridge
     name: backups_net
-  cloudflrared_net:
+  cloudflared_net:
     external: true
