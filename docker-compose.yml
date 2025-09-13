@@ -6,7 +6,7 @@ services:
       - backups:/backups
     networks:
       - backups_net
-      - clouflrared_net
+      - cloudflrared_net
 volumes:
   backups:
 networks:
