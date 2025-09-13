@@ -40,6 +40,7 @@ def create_app() -> Flask:
                     "schedule": a.schedule,
                     "drive_folder_id": a.drive_folder_id,
                     "retention": a.retention,
+
                 }
                 for a in apps
             ])
