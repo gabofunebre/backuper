@@ -16,13 +16,28 @@ class BackupClient:
         return {"Authorization": f"Bearer {self.token}"}
 
     def check_capabilities(self) -> bool:
-        """Verify that the app is ready for backup."""
+        """Verify that the app exposes a supported capabilities contract."""
         resp = requests.get(
             f"{self.base_url}/backup/capabilities", headers=self._headers(), timeout=30
         )
         resp.raise_for_status()
         data = resp.json()
-        return data.get("ready", False)
+        try:
+            version = data["version"]
+            types = data["types"]
+        except KeyError as exc:
+            raise ValueError(f"Missing capability field: {exc.args[0]}") from exc
+        if version != "v1":
+            raise ValueError(f"Unsupported capabilities version: {version}")
+        if not isinstance(types, list) or not all(isinstance(t, str) for t in types):
+            raise ValueError("Invalid 'types' field in capabilities")
+        est_seconds = data.get("est_seconds")
+        if est_seconds is not None and not isinstance(est_seconds, int):
+            raise ValueError("Invalid 'est_seconds' field in capabilities")
+        est_size = data.get("est_size")
+        if est_size is not None and not isinstance(est_size, int):
+            raise ValueError("Invalid 'est_size' field in capabilities")
+        return True
 
     def export_backup(self, app_name: str, drive_folder_id: Optional[str] = None) -> None:
         """Request backup export and upload the result to Google Drive."""
