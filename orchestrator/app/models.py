@@ -10,3 +10,5 @@ class App(Base):
     name = Column(String, unique=True, nullable=False)
     url = Column(String, nullable=False)
     token = Column(String, nullable=False)
+    # Cron-style schedule for backup tasks
+    schedule = Column(String, nullable=True)

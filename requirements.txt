@@ -1,3 +1,7 @@
 flask
 sqlalchemy
 python-dotenv
+APScheduler
+requests
+google-api-python-client
+google-auth
