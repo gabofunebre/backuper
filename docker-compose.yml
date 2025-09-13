@@ -1,5 +1,3 @@
-version: "3.9"
-
 services:
   backuper:
     build: .
@@ -8,10 +6,6 @@ services:
       - backups:/backups
     networks:
       - backups_net
-
-volumes:
-  backups:
-
 networks:
   backups_net:
     driver: bridge
