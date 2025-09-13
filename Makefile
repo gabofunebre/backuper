@@ -1,6 +1,6 @@
 # Helper Makefile para desarrollo y automatización
 
-APP_SVC ?= app
+APP_SVC ?= orchestrator
 DOCKER_COMPOSE ?= docker compose
 MSG ?= update
 
