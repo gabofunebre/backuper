@@ -1,3 +1,4 @@
+import datetime
 import os
 import subprocess
 from typing import Iterable, Optional
@@ -39,8 +40,16 @@ class BackupClient:
             raise ValueError("Invalid 'est_size' field in capabilities")
         return True
 
-    def export_backup(self, app_name: str, drive_folder_id: Optional[str] = None) -> None:
-        """Request backup export and upload the result to Google Drive."""
+    def export_backup(
+        self,
+        app_name: str,
+        drive_folder_id: Optional[str] = None,
+        retention: Optional[int] = None,
+    ) -> None:
+        """Request backup export and upload the result to Google Drive.
+
+        After uploading, apply retention policy if ``retention`` is provided.
+        """
         resp = requests.post(
             f"{self.base_url}/backup/export",
             headers=self._headers(),
@@ -48,9 +57,11 @@ class BackupClient:
             timeout=300,
         )
         resp.raise_for_status()
-        self._upload_stream_to_drive(
-            resp.iter_content(64 * 1024), f"{app_name}.bak", drive_folder_id
-        )
+        timestamp = datetime.datetime.utcnow().strftime("%Y%m%d%H%M%S")
+        filename = f"{app_name}_{timestamp}.bak"
+        self._upload_stream_to_drive(resp.iter_content(64 * 1024), filename)
+        if retention:
+            self.apply_retention(app_name, retention)
 
     def _upload_stream_to_drive(
         self, chunks: Iterable[bytes], filename: str, drive_folder_id: Optional[str] = None
@@ -72,4 +83,33 @@ class BackupClient:
             returncode = proc.wait()
         if returncode != 0:
             raise RuntimeError(f"rclone exited with status {returncode}")
+
+    def apply_retention(self, app_name: str, retention: int) -> None:
+        """Remove old backups exceeding the retention count for the given app."""
+        if retention <= 0:
+            return
+        remote = os.environ.get("RCLONE_REMOTE", "drive:")
+        result = subprocess.run(
+            ["rclone", "lsl", remote],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        lines = [l for l in result.stdout.splitlines() if l.strip()]
+        backups: list[tuple[datetime.datetime, str]] = []
+        for line in lines:
+            parts = line.split(None, 3)
+            if len(parts) < 4:
+                continue
+            _, date, time, name = parts
+            if not name.startswith(f"{app_name}_"):
+                continue
+            try:
+                dt = datetime.datetime.fromisoformat(f"{date}T{time}")
+            except ValueError:
+                continue
+            backups.append((dt, name))
+        backups.sort(reverse=True)
+        for _, name in backups[retention:]:
+            subprocess.run(["rclone", "delete", f"{remote}{name}"], check=True)
 
