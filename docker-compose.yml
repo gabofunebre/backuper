@@ -2,14 +2,16 @@ services:
   orchestrator:
     build: .
     container_name: backuper
-
     volumes:
       - backups:/backups
     networks:
       - backups_net
+      - clouflrared_net
 volumes:
   backups:
 networks:
+  cloudflrared_net:
+    extermal: true
   backups_net:
     driver: bridge
     name: backups_net
