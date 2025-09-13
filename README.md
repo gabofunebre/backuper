@@ -1,12 +1,13 @@
 # Backup Orchestrator (Docker)
 
 Orquestador liviano que:
-- Exponde **UI web** (puerto 5550) para registrar apps y programar respaldos.
+- Exponde **UI web** (puerto 5550 por defecto, configurable con `PORT`) para registrar apps y programar respaldos.
 - Se conecta por red **`backups_net`** a cada app que **opta por backup**.
 - Pide el backup por HTTP al endpoint de la app y **sube a la nube** (inicio: Google Drive).
 - Aplica **retención**, guarda **logs** y permite **“Probar ahora”**.
 
 ---
+
 
 ## Puertos
 
@@ -24,6 +25,7 @@ uvicorn app.main:app --reload
 ```
 
 La documentación OpenAPI está disponible en `http://localhost:8000/docs`.
+
 
 ## 1) Requisitos
 - Docker y Docker Compose.
