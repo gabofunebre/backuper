@@ -7,7 +7,25 @@ Orquestador liviano que:
 - Aplica **retención**, guarda **logs** y permite **“Probar ahora”**.
 
 ---
-Copiá `.env.example` a `.env` y ajustá `DATABASE_URL` y `PORT` según tu entorno.
+
+
+## Puertos
+
+- **FastAPI** escucha en el puerto `8000`.
+- La interfaz **Flask** del orquestador escucha en el puerto `5550`.
+
+## API Rápida
+
+El proyecto incluye un servicio FastAPI para registrar aplicaciones a respaldar.
+
+### Ejecutar
+
+```bash
+uvicorn app.main:app --reload
+```
+
+La documentación OpenAPI está disponible en `http://localhost:8000/docs`.
+
 
 ## 1) Requisitos
 - Docker y Docker Compose.

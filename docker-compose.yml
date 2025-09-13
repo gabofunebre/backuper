@@ -1,11 +1,8 @@
 services:
   orchestrator:
     build: .
-    container_name: orchestrator
-    ports:
-      - "${PORT:-5550}:5550"
-    env_file:
-      - .env
+    container_name: backuper
+
     volumes:
       - backups:/backups
     networks:
