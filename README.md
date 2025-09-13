@@ -87,6 +87,10 @@ En **Apps → Agregar**:
 
 Luego, **Probar ahora**. Deberías ver un archivo `NOMBRE_YYYYmmdd_HHMM.dump` en la carpeta de Drive.
 
+Para un detalle del flujo de registro vía API, ejemplos de peticiones HTTP y
+buenas prácticas de preparación de contenedores, ver
+[docs/registro_de_apps.md](docs/registro_de_apps.md).
+
 ## 8) Política de retención
 Configurable por app. Ejemplo:
 - **Diarios**: 7
