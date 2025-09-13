@@ -6,12 +6,12 @@ services:
       - backups:/backups
     networks:
       - backups_net
-      - cloudflrared_net
+      - cloudflared_net
 volumes:
   backups:
 networks:
-  cloudflrared_net:
-    extermal: true
   backups_net:
     driver: bridge
     name: backups_net
+  cloudflrared_net:
+    extermal: true
