@@ -33,11 +33,17 @@ class BackupClient:
             timeout=300,
         )
         resp.raise_for_status()
-        self._upload_stream_to_drive(resp.iter_content(64 * 1024), f"{app_name}.bak")
+        self._upload_stream_to_drive(
+            resp.iter_content(64 * 1024), f"{app_name}.bak", drive_folder_id
+        )
 
-    def _upload_stream_to_drive(self, chunks: Iterable[bytes], filename: str) -> None:
+    def _upload_stream_to_drive(
+        self, chunks: Iterable[bytes], filename: str, drive_folder_id: Optional[str] = None
+    ) -> None:
         """Upload an iterable of bytes to Google Drive using rclone rcat."""
         remote = os.environ.get("RCLONE_REMOTE", "drive:")
+        if drive_folder_id:
+            remote = f"{remote}{drive_folder_id.rstrip('/')}/"
         cmd = ["rclone", "rcat", f"{remote}{filename}"]
         proc = subprocess.Popen(cmd, stdin=subprocess.PIPE)
         if proc.stdin is None:
