@@ -4,6 +4,7 @@ from dotenv import load_dotenv
 
 from .database import Base, SessionLocal, engine
 from .models import App
+from orchestrator.scheduler import start as start_scheduler, schedule_app_backups
 
 
 def create_app() -> Flask:
@@ -11,6 +12,7 @@ def create_app() -> Flask:
     load_dotenv()
     app = Flask(__name__)
     Base.metadata.create_all(bind=engine)
+    start_scheduler()
 
     @app.route("/")
     def index() -> str:
@@ -23,7 +25,13 @@ def create_app() -> Flask:
         with SessionLocal() as db:
             apps = db.query(App).all()
             return jsonify([
-                {"name": a.name, "url": a.url, "token": a.token} for a in apps
+                {
+                    "name": a.name,
+                    "url": a.url,
+                    "token": a.token,
+                    "schedule": a.schedule,
+                }
+                for a in apps
             ])
 
     @app.post("/apps")
@@ -32,10 +40,16 @@ def create_app() -> Flask:
         data = request.get_json(force=True)
         if not data:
             return {"error": "invalid payload"}, 400
-        new_app = App(name=data.get("name"), url=data.get("url"), token=data.get("token"))
+        new_app = App(
+            name=data.get("name"),
+            url=data.get("url"),
+            token=data.get("token"),
+            schedule=data.get("schedule"),
+        )
         with SessionLocal() as db:
             db.add(new_app)
             db.commit()
+        schedule_app_backups()
         return {"status": "ok"}, 201
 
     return app
