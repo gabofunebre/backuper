@@ -36,7 +36,13 @@ backup-orchestrator/
 ```
 
 ## 3) Variables (.env)
-Crear un archivo `.env` en la raíz:
+Copiá el archivo `.env.example` a `.env` en la raíz del proyecto y ajustá las variables según sea necesario:
+
+```bash
+cp .env.example .env
+```
+
+Luego editá el archivo con tus propios valores:
 
 ```
 # UI y seguridad
