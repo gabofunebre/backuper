@@ -24,7 +24,12 @@ class BackupClient:
         data = resp.json()
         return data.get("ready", False)
 
-    def export_backup(self, app_name: str, drive_folder_id: Optional[str] = None) -> None:
+    def export_backup(
+        self,
+        app_name: str,
+        drive_folder_id: Optional[str] = None,
+        remote: Optional[str] = None,
+    ) -> None:
         """Request backup export and upload the result to Google Drive."""
         resp = requests.post(
             f"{self.base_url}/backup/export",
@@ -33,11 +38,15 @@ class BackupClient:
             timeout=300,
         )
         resp.raise_for_status()
-        self._upload_stream_to_drive(resp.iter_content(64 * 1024), f"{app_name}.bak")
+        self._upload_stream_to_drive(
+            resp.iter_content(64 * 1024), f"{app_name}.bak", remote
+        )
 
-    def _upload_stream_to_drive(self, chunks: Iterable[bytes], filename: str) -> None:
+    def _upload_stream_to_drive(
+        self, chunks: Iterable[bytes], filename: str, remote: Optional[str] = None
+    ) -> None:
         """Upload an iterable of bytes to Google Drive using rclone rcat."""
-        remote = os.environ.get("RCLONE_REMOTE", "drive:")
+        remote = remote or os.environ.get("RCLONE_REMOTE", "drive:")
         cmd = ["rclone", "rcat", f"{remote}{filename}"]
         proc = subprocess.Popen(cmd, stdin=subprocess.PIPE)
         if proc.stdin is None:

@@ -14,5 +14,7 @@ class App(Base):
     schedule = Column(String, nullable=True)
     # Google Drive folder ID where backups will be stored
     drive_folder_id = Column(String, nullable=True)
+    # Optional rclone remote override
+    rclone_remote = Column(String, nullable=True)
     # Number of backups to retain
     retention = Column(Integer, nullable=True)

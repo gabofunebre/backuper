@@ -1,4 +1,5 @@
 import os
+import os
 import subprocess
 import sys
 import tracemalloc
@@ -43,3 +44,33 @@ def test_upload_stream_large_file_memory(monkeypatch):
     assert peak < 10 * 1024 * 1024  # peak memory under 10MB
     assert sum(written_sizes) == 50 * 1024 * 1024
     assert max(written_sizes) <= client.upload_buffer
+
+
+def test_upload_stream_custom_remote(monkeypatch):
+    client = BackupClient("http://example", "token")
+
+    class DummyStdin:
+        def write(self, data):
+            pass
+
+        def close(self):
+            pass
+
+    class DummyProcess:
+        def __init__(self):
+            self.stdin = DummyStdin()
+
+        def wait(self):
+            return 0
+
+    captured = {}
+
+    def fake_popen(cmd, stdin, **kwargs):
+        captured["cmd"] = cmd
+        return DummyProcess()
+
+    monkeypatch.setattr(subprocess, "Popen", fake_popen)
+
+    client._upload_stream_to_drive([b"data"], "test.bak", remote="custom:")
+
+    assert captured["cmd"][2] == "custom:test.bak"

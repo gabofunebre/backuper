@@ -5,7 +5,7 @@ async function loadApps() {
   tbody.innerHTML = '';
   apps.forEach(app => {
     const tr = document.createElement('tr');
-    tr.innerHTML = `<td>${app.name}</td><td>${app.url}</td><td>${app.token}</td><td>${app.drive_folder_id ?? ''}</td><td>${app.retention ?? ''}</td>`;
+    tr.innerHTML = `<td>${app.name}</td><td>${app.url}</td><td>${app.token}</td><td>${app.drive_folder_id ?? ''}</td><td>${app.rclone_remote ?? ''}</td><td>${app.retention ?? ''}</td>`;
     tbody.appendChild(tr);
   });
 }
@@ -20,6 +20,7 @@ document.addEventListener('DOMContentLoaded', () => {
       url: document.getElementById('url').value,
       token: document.getElementById('token').value,
       drive_folder_id: document.getElementById('drive_folder_id').value,
+      rclone_remote: document.getElementById('rclone_remote').value,
       retention: document.getElementById('retention').value ? parseInt(document.getElementById('retention').value, 10) : null
     };
     const resp = await fetch('/apps', {

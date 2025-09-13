@@ -18,6 +18,8 @@ def create_app() -> Flask:
     with engine.begin() as conn:
         if "drive_folder_id" not in columns:
             conn.execute(text("ALTER TABLE apps ADD COLUMN drive_folder_id VARCHAR"))
+        if "rclone_remote" not in columns:
+            conn.execute(text("ALTER TABLE apps ADD COLUMN rclone_remote VARCHAR"))
         if "retention" not in columns:
             conn.execute(text("ALTER TABLE apps ADD COLUMN retention INTEGER"))
     start_scheduler()
@@ -39,6 +41,7 @@ def create_app() -> Flask:
                     "token": a.token,
                     "schedule": a.schedule,
                     "drive_folder_id": a.drive_folder_id,
+                    "rclone_remote": a.rclone_remote,
                     "retention": a.retention,
 
                 }
@@ -57,6 +60,7 @@ def create_app() -> Flask:
             token=data.get("token"),
             schedule=data.get("schedule"),
             drive_folder_id=data.get("drive_folder_id"),
+            rclone_remote=data.get("rclone_remote"),
             retention=data.get("retention"),
         )
         with SessionLocal() as db:

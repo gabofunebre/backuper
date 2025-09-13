@@ -34,10 +34,11 @@ def run_backup(app_id: int) -> None:
             return
     client = BackupClient(app.url, app.token)
     if client.check_capabilities():
+        remote = app.rclone_remote
         if app.drive_folder_id:
-            client.export_backup(app.name, app.drive_folder_id)
+            client.export_backup(app.name, app.drive_folder_id, remote)
         else:
-            client.export_backup(app.name)
+            client.export_backup(app.name, None, remote)
 
 
 def start() -> None:
