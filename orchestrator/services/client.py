@@ -1,19 +1,16 @@
-import io
 import os
-from typing import Iterable, Optional
-
+import subprocess
+from typing import Iterable
 import requests
-from google.oauth2 import service_account
-from googleapiclient.discovery import build
-from googleapiclient.http import MediaIoBaseUpload
 
 
 class BackupClient:
     """Client for interacting with app backup endpoints and uploading to Drive."""
 
-    def __init__(self, base_url: str, token: str):
+    def __init__(self, base_url: str, token: str, upload_buffer: int = 8 * 1024 * 1024):
         self.base_url = base_url.rstrip("/")
         self.token = token
+        self.upload_buffer = upload_buffer
 
     def _headers(self) -> dict[str, str]:
         return {"Authorization": f"Bearer {self.token}"}
@@ -36,24 +33,22 @@ class BackupClient:
             timeout=300,
         )
         resp.raise_for_status()
-        self._upload_stream_to_drive(
-            resp.iter_content(64 * 1024), f"{app_name}.bak", drive_folder_id
-        )
-    def _upload_stream_to_drive(
-        self, chunks: Iterable[bytes], filename: str, drive_folder_id: Optional[str]
-    ) -> None:
-        """Upload an iterable of bytes to Google Drive using service account credentials."""
-        creds = service_account.Credentials.from_service_account_file(
-            os.environ["GOOGLE_APPLICATION_CREDENTIALS"],
-            scopes=["https://www.googleapis.com/auth/drive.file"],
-        )
-        drive = build("drive", "v3", credentials=creds)
-        buffer = io.BytesIO()
-        for chunk in chunks:
-            buffer.write(chunk)
-        buffer.seek(0)
-        media = MediaIoBaseUpload(buffer, mimetype="application/octet-stream")
-        file_metadata = {"name": filename}
-        if drive_folder_id:
-            file_metadata["parents"] = [drive_folder_id]
-        drive.files().create(body=file_metadata, media_body=media, fields="id").execute()
+        self._upload_stream_to_drive(resp.iter_content(64 * 1024), f"{app_name}.bak")
+
+    def _upload_stream_to_drive(self, chunks: Iterable[bytes], filename: str) -> None:
+        """Upload an iterable of bytes to Google Drive using rclone rcat."""
+        remote = os.environ.get("RCLONE_REMOTE", "drive:")
+        cmd = ["rclone", "rcat", f"{remote}{filename}"]
+        proc = subprocess.Popen(cmd, stdin=subprocess.PIPE)
+        if proc.stdin is None:
+            raise RuntimeError("Failed to open rclone stdin")
+        try:
+            for chunk in chunks:
+                for i in range(0, len(chunk), self.upload_buffer):
+                    proc.stdin.write(chunk[i : i + self.upload_buffer])
+        finally:
+            proc.stdin.close()
+            returncode = proc.wait()
+        if returncode != 0:
+            raise RuntimeError(f"rclone exited with status {returncode}")
+
