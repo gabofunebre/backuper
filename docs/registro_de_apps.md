@@ -6,11 +6,14 @@ orquestador de respaldos. Incluye el flujo de registro, parámetros
 requeridos, endpoints y buenas prácticas para preparar el contenedor de
 cada app.
 
+## Configurar rclone desde la UI
+El orquestador permite inicializar rclone sin entrar al contenedor. En la interfaz web encontrás un apartado **Rclone** que ejecuta `rclone config` y lista los remotes disponibles mediante el endpoint `/rclone/remotes`.
+
 ## Flujo de registro
 
 1. **Preparar el contenedor de la app**
    - Conéctalo a la red `backups_net` (ver
-     [instrucciones](../README.md#11-conectar-una-app-existente-a-backups_net)).
+     [instrucciones](../README.md#12-conectar-una-app-existente-a-backups_net)).
    - Exponé los endpoints internos `GET /backup/capabilities` y
      `POST /backup/export`, protegidos con un token.
    - Montá como _read-only_ las rutas de datos necesarias para generar el
@@ -46,7 +49,7 @@ cada app.
       { "id": "mi-app", "status": "registered" }
       ```
    - También se puede registrar desde la interfaz web como se describe en el
-     [README](../README.md#7-registrar-una-app-en-la-ui).
+     [README](../README.md#8-registrar-una-app-en-la-ui).
 
 3. **Ejecutar un respaldo manual**
    - Endpoint: `POST /api/apps/mi-app/backups`
