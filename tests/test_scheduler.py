@@ -22,7 +22,13 @@ def test_session():
 
 def test_run_backup_exports(monkeypatch, test_session):
     session = test_session()
-    app = App(name="test", url="http://url", token="token", schedule="* * * * *")
+    app = App(
+        name="test",
+        url="http://url",
+        token="token",
+        schedule="* * * * *",
+        retention=2,
+    )
     session.add(app)
     session.commit()
     app_id = app.id
@@ -39,11 +45,11 @@ def test_run_backup_exports(monkeypatch, test_session):
         def check_capabilities(self) -> bool:
             called["checked"] = True
             return True
-
         def export_backup(
             self, name: str, drive_folder_id=None, remote=None
         ) -> None:
             called["exported"] = (name, drive_folder_id, remote)
+
 
     monkeypatch.setattr(scheduler, "BackupClient", DummyClient)
 
@@ -65,10 +71,10 @@ def test_run_backup_missing_app(monkeypatch, test_session):
 
         def check_capabilities(self) -> bool:
             return True
-
         def export_backup(
             self, name: str, drive_folder_id=None, remote=None
         ) -> None:  # pragma: no cover - not expected
+
             pass
 
     monkeypatch.setattr(scheduler, "BackupClient", DummyClient)

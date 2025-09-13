@@ -1,3 +1,4 @@
+import datetime
 import os
 import subprocess
 from typing import Iterable, Optional
@@ -16,14 +17,36 @@ class BackupClient:
         return {"Authorization": f"Bearer {self.token}"}
 
     def check_capabilities(self) -> bool:
-        """Verify that the app is ready for backup."""
+        """Verify that the app exposes a supported capabilities contract."""
         resp = requests.get(
             f"{self.base_url}/backup/capabilities", headers=self._headers(), timeout=30
         )
         resp.raise_for_status()
         data = resp.json()
-        return data.get("ready", False)
+        try:
+            version = data["version"]
+            types = data["types"]
+        except KeyError as exc:
+            raise ValueError(f"Missing capability field: {exc.args[0]}") from exc
+        if version != "v1":
+            raise ValueError(f"Unsupported capabilities version: {version}")
+        if not isinstance(types, list) or not all(isinstance(t, str) for t in types):
+            raise ValueError("Invalid 'types' field in capabilities")
+        est_seconds = data.get("est_seconds")
+        if est_seconds is not None and not isinstance(est_seconds, int):
+            raise ValueError("Invalid 'est_seconds' field in capabilities")
+        est_size = data.get("est_size")
+        if est_size is not None and not isinstance(est_size, int):
+            raise ValueError("Invalid 'est_size' field in capabilities")
+        return True
 
+    def export_backup(
+        self,
+        app_name: str,
+        drive_folder_id: Optional[str] = None,
+        retention: Optional[int] = None,
+    ) -> None:
+        """Request backup export and upload the result to Google Drive.
     def export_backup(
         self,
         app_name: str,
@@ -60,4 +83,33 @@ class BackupClient:
             returncode = proc.wait()
         if returncode != 0:
             raise RuntimeError(f"rclone exited with status {returncode}")
+
+    def apply_retention(self, app_name: str, retention: int) -> None:
+        """Remove old backups exceeding the retention count for the given app."""
+        if retention <= 0:
+            return
+        remote = os.environ.get("RCLONE_REMOTE", "drive:")
+        result = subprocess.run(
+            ["rclone", "lsl", remote],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        lines = [l for l in result.stdout.splitlines() if l.strip()]
+        backups: list[tuple[datetime.datetime, str]] = []
+        for line in lines:
+            parts = line.split(None, 3)
+            if len(parts) < 4:
+                continue
+            _, date, time, name = parts
+            if not name.startswith(f"{app_name}_"):
+                continue
+            try:
+                dt = datetime.datetime.fromisoformat(f"{date}T{time}")
+            except ValueError:
+                continue
+            backups.append((dt, name))
+        backups.sort(reverse=True)
+        for _, name in backups[retention:]:
+            subprocess.run(["rclone", "delete", f"{remote}{name}"], check=True)
 

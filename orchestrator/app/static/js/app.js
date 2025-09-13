@@ -19,6 +19,7 @@ document.addEventListener('DOMContentLoaded', () => {
       name: document.getElementById('name').value,
       url: document.getElementById('url').value,
       token: document.getElementById('token').value,
+      schedule: document.getElementById('schedule').value || null,
       drive_folder_id: document.getElementById('drive_folder_id').value,
       rclone_remote: document.getElementById('rclone_remote').value,
       retention: document.getElementById('retention').value ? parseInt(document.getElementById('retention').value, 10) : null

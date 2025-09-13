@@ -2,6 +2,7 @@ import os
 from flask import Flask, render_template, request, jsonify
 from dotenv import load_dotenv
 from sqlalchemy import inspect, text
+from apscheduler.triggers.cron import CronTrigger
 
 from .database import Base, SessionLocal, engine
 from .models import App
@@ -54,11 +55,17 @@ def create_app() -> Flask:
         data = request.get_json(force=True)
         if not data:
             return {"error": "invalid payload"}, 400
+        schedule = data.get("schedule") or None
+        if schedule:
+            try:
+                CronTrigger.from_crontab(schedule)
+            except ValueError:
+                return {"error": "invalid schedule"}, 400
         new_app = App(
             name=data.get("name"),
             url=data.get("url"),
             token=data.get("token"),
-            schedule=data.get("schedule"),
+            schedule=schedule,
             drive_folder_id=data.get("drive_folder_id"),
             rclone_remote=data.get("rclone_remote"),
             retention=data.get("retention"),

@@ -58,9 +58,16 @@ cada app.
 ## Endpoints que debe exponer cada app
 
 - `GET /backup/capabilities`
-  ```json
-  { "version": "v1", "types": ["db"], "est_seconds": 123, "est_size": 104857600 }
-  ```
+  - Respuesta JSON (`200 OK`) con el siguiente formato:
+    ```json
+    { "version": "v1", "types": ["db"], "est_seconds": 123, "est_size": 104857600 }
+    ```
+  - Campos:
+    - `version` (string, obligatorio): versión del contrato de capacidades. Actualmente solo se soporta `v1`.
+    - `types` (array de strings, obligatorio): tipos de respaldo disponibles.
+    - `est_seconds` (entero, opcional): tiempo estimado en segundos para generar el respaldo.
+    - `est_size` (entero, opcional): tamaño aproximado del respaldo en bytes.
+  - El orquestador rechazará la respuesta si faltan campos obligatorios o la versión no es compatible.
 
 - `POST /backup/export`
   - Stream del respaldo.
