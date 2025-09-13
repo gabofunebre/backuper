@@ -20,23 +20,12 @@
             <input type="text" class="form-control" id="token" required>
           </div>
           <div class="mb-3">
-            <label for="schedule" class="form-label">Schedule</label>
-            <input type="text" class="form-control" id="schedule" placeholder="0 3 * * *">
-          </div>
-          <div class="mb-3">
             <label for="drive_folder_id" class="form-label">Drive Folder ID</label>
             <input type="text" class="form-control" id="drive_folder_id">
           </div>
           <div class="mb-3">
-            <label class="form-label">Retention</label>
-            <div class="input-group mb-2">
-              <span class="input-group-text" id="retention-daily-label">Daily</span>
-              <input type="number" class="form-control" id="retention-daily" aria-describedby="retention-daily-label">
-            </div>
-            <div class="input-group">
-              <span class="input-group-text" id="retention-weekly-label">Weekly</span>
-              <input type="number" class="form-control" id="retention-weekly" aria-describedby="retention-weekly-label">
-            </div>
+            <label for="retention" class="form-label">Retention</label>
+            <input type="number" class="form-control" id="retention" min="0">
           </div>
           <button type="submit" class="btn btn-primary">Save</button>
         </form>

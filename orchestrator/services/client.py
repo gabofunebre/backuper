@@ -1,6 +1,6 @@
 import io
 import os
-from typing import Iterable
+from typing import Iterable, Optional
 
 import requests
 from google.oauth2 import service_account
@@ -27,7 +27,7 @@ class BackupClient:
         data = resp.json()
         return data.get("ready", False)
 
-    def export_backup(self, app_name: str) -> None:
+    def export_backup(self, app_name: str, drive_folder_id: Optional[str] = None) -> None:
         """Request backup export and upload the result to Google Drive."""
         resp = requests.post(
             f"{self.base_url}/backup/export",
@@ -36,9 +36,12 @@ class BackupClient:
             timeout=300,
         )
         resp.raise_for_status()
-        self._upload_stream_to_drive(resp.iter_content(64 * 1024), f"{app_name}.bak")
-
-    def _upload_stream_to_drive(self, chunks: Iterable[bytes], filename: str) -> None:
+        self._upload_stream_to_drive(
+            resp.iter_content(64 * 1024), f"{app_name}.bak", drive_folder_id
+        )
+    def _upload_stream_to_drive(
+        self, chunks: Iterable[bytes], filename: str, drive_folder_id: Optional[str]
+    ) -> None:
         """Upload an iterable of bytes to Google Drive using service account credentials."""
         creds = service_account.Credentials.from_service_account_file(
             os.environ["GOOGLE_APPLICATION_CREDENTIALS"],
@@ -51,4 +54,6 @@ class BackupClient:
         buffer.seek(0)
         media = MediaIoBaseUpload(buffer, mimetype="application/octet-stream")
         file_metadata = {"name": filename}
+        if drive_folder_id:
+            file_metadata["parents"] = [drive_folder_id]
         drive.files().create(body=file_metadata, media_body=media, fields="id").execute()

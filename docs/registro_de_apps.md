@@ -36,7 +36,7 @@ cada app.
        "token": "secreto-compartido",
        "drive_folder_id": "1AbC2dEfG3",
        "schedule": "0 3 * * *",
-       "retention": { "daily": 7, "weekly": 4 }
+       "retention": 7
      }
      ```
    - Respuesta (`201 Created`):

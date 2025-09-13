@@ -34,7 +34,7 @@ def run_backup(app_id: int) -> None:
             return
     client = BackupClient(app.url, app.token)
     if client.check_capabilities():
-        client.export_backup(app.name)
+        client.export_backup(app.name, app.drive_folder_id)
 
 
 def start() -> None:
