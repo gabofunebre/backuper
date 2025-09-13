@@ -7,4 +7,6 @@ class App(Base):
     __tablename__ = "apps"
 
     id = Column(Integer, primary_key=True, index=True)
-    name = Column(String, unique=True, index=True, nullable=False)
+    name = Column(String, unique=True, nullable=False)
+    url = Column(String, nullable=False)
+    token = Column(String, nullable=False)
