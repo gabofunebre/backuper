@@ -35,14 +35,16 @@ cada app.
        "url": "http://mi-app:8000",
        "token": "secreto-compartido",
        "drive_folder_id": "1AbC2dEfG3",
+       "rclone_remote": "gdrive:",
        "schedule": "0 3 * * *",
        "retention": 7
-     }
-     ```
-   - Respuesta (`201 Created`):
-     ```json
-     { "id": "mi-app", "status": "registered" }
-     ```
+      }
+      ```
+    - El campo `rclone_remote` es opcional y permite usar un remote específico en lugar del global.
+    - Respuesta (`201 Created`):
+      ```json
+      { "id": "mi-app", "status": "registered" }
+      ```
    - También se puede registrar desde la interfaz web como se describe en el
      [README](../README.md#7-registrar-una-app-en-la-ui).
 

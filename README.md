@@ -45,6 +45,7 @@ BACKUP_MAX_SIZE_MB=20480
 
 # rclone
 RCLONE_REMOTE=gdrive
+# Remote por defecto si la app no especifica uno propio
 # Cada app elige su carpeta destino; el orquestador guarda el folderId por app
 ```
 
@@ -81,6 +82,7 @@ En **Apps → Agregar**:
 - **URL interna**: `http://NOMBRE_DEL_CONTENEDOR:PUERTO` (gracias a `backups_net`).
 - **Token** (PSK) que valida la app.
 - **Destino en nube**: Folder ID de Drive.
+- **Remote rclone**: (opcional) para usar un remote distinto al global.
 - **Frecuencia** (diario/semanal) y **retención** (p.ej. 7 diarios, 4 semanales).
 
 Luego, **Probar ahora**. Deberías ver un archivo `NOMBRE_YYYYmmdd_HHMM.dump` en la carpeta de Drive.

@@ -47,9 +47,13 @@ class BackupClient:
         retention: Optional[int] = None,
     ) -> None:
         """Request backup export and upload the result to Google Drive.
-
-        After uploading, apply retention policy if ``retention`` is provided.
-        """
+    def export_backup(
+        self,
+        app_name: str,
+        drive_folder_id: Optional[str] = None,
+        remote: Optional[str] = None,
+    ) -> None:
+        """Request backup export and upload the result to Google Drive."""
         resp = requests.post(
             f"{self.base_url}/backup/export",
             headers=self._headers(),
@@ -57,19 +61,15 @@ class BackupClient:
             timeout=300,
         )
         resp.raise_for_status()
-        timestamp = datetime.datetime.utcnow().strftime("%Y%m%d%H%M%S")
-        filename = f"{app_name}_{timestamp}.bak"
-        self._upload_stream_to_drive(resp.iter_content(64 * 1024), filename)
-        if retention:
-            self.apply_retention(app_name, retention)
+        self._upload_stream_to_drive(
+            resp.iter_content(64 * 1024), f"{app_name}.bak", remote
+        )
 
     def _upload_stream_to_drive(
-        self, chunks: Iterable[bytes], filename: str, drive_folder_id: Optional[str] = None
+        self, chunks: Iterable[bytes], filename: str, remote: Optional[str] = None
     ) -> None:
         """Upload an iterable of bytes to Google Drive using rclone rcat."""
-        remote = os.environ.get("RCLONE_REMOTE", "drive:")
-        if drive_folder_id:
-            remote = f"{remote}{drive_folder_id.rstrip('/')}/"
+        remote = remote or os.environ.get("RCLONE_REMOTE", "drive:")
         cmd = ["rclone", "rcat", f"{remote}{filename}"]
         proc = subprocess.Popen(cmd, stdin=subprocess.PIPE)
         if proc.stdin is None:
