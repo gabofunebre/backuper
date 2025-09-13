@@ -1,6 +1,6 @@
 import os
 import subprocess
-from typing import Iterable
+from typing import Iterable, Optional
 import requests
 
 
