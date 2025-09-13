@@ -30,6 +30,11 @@ def create_app() -> Flask:
                     "url": a.url,
                     "token": a.token,
                     "schedule": a.schedule,
+                    "drive_folder_id": a.drive_folder_id,
+                    "retention": {
+                        "daily": a.retention_daily,
+                        "weekly": a.retention_weekly,
+                    },
                 }
                 for a in apps
             ])
@@ -45,6 +50,9 @@ def create_app() -> Flask:
             url=data.get("url"),
             token=data.get("token"),
             schedule=data.get("schedule"),
+            drive_folder_id=data.get("drive_folder_id"),
+            retention_daily=(data.get("retention") or {}).get("daily"),
+            retention_weekly=(data.get("retention") or {}).get("weekly"),
         )
         with SessionLocal() as db:
             db.add(new_app)
