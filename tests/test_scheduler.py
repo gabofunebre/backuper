@@ -22,7 +22,13 @@ def test_session():
 
 def test_run_backup_exports(monkeypatch, test_session):
     session = test_session()
-    app = App(name="test", url="http://url", token="token", schedule="* * * * *")
+    app = App(
+        name="test",
+        url="http://url",
+        token="token",
+        schedule="* * * * *",
+        retention=2,
+    )
     session.add(app)
     session.commit()
     app_id = app.id
@@ -40,8 +46,8 @@ def test_run_backup_exports(monkeypatch, test_session):
             called["checked"] = True
             return True
 
-        def export_backup(self, name: str) -> None:
-            called["exported"] = name
+        def export_backup(self, name: str, drive_folder_id=None, retention=None) -> None:
+            called["exported"] = (name, drive_folder_id, retention)
 
     monkeypatch.setattr(scheduler, "BackupClient", DummyClient)
 
@@ -49,7 +55,7 @@ def test_run_backup_exports(monkeypatch, test_session):
 
     assert called["init"] == (app.url, app.token)
     assert called["checked"]
-    assert called["exported"] == app.name
+    assert called["exported"] == (app.name, None, app.retention)
 
 
 def test_run_backup_missing_app(monkeypatch, test_session):
@@ -64,7 +70,7 @@ def test_run_backup_missing_app(monkeypatch, test_session):
         def check_capabilities(self) -> bool:
             return True
 
-        def export_backup(self, name: str) -> None:  # pragma: no cover - not expected
+        def export_backup(self, name: str, drive_folder_id=None, retention=None) -> None:  # pragma: no cover - not expected
             pass
 
     monkeypatch.setattr(scheduler, "BackupClient", DummyClient)
