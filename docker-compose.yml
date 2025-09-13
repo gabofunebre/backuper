@@ -1,20 +1,37 @@
-name: backup-orchestrator
+version: "3.9"
+
 services:
-  orchestrator:
-    container_name: backup-orchestrator
-    restart: unless-stopped
-    env_file:
-      - .env
+  backuper:
+    build: .
+    container_name: backuper
+    volumes:
+      - backups:/backups
+    ports:
+      - "8000:8000"
     networks:
       - backups_net
+
+  app1:
+    image: alpine
+    container_name: app1
+    command: sh -c "echo 'app1 data' > /data.txt && tail -f /dev/null"
     volumes:
-      - ./config:/app/config     # tus .conf y settings del orquestador
-      - ./data:/app/data         # logs, estados, historial (archivos, no DB)
-      - ./tmp:/app/tmp           # buffer temporal (opcional)
-      - rclone_config:/root/.config/rclone  # tokens/remote de rclone
+      - backups:/backups
+    networks:
+      - backups_net
+
+  app2:
+    image: alpine
+    container_name: app2
+    command: sh -c "echo 'app2 data' > /data.txt && tail -f /dev/null"
+    volumes:
+      - backups:/backups
+    networks:
+      - backups_net
+
+volumes:
+  backups:
+
 networks:
   backups_net:
-    name: backups_net
     driver: bridge
-volumes:
-  rclone_config:
