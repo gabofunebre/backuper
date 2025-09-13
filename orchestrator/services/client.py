@@ -44,13 +44,6 @@ class BackupClient:
         self,
         app_name: str,
         drive_folder_id: Optional[str] = None,
-        retention: Optional[int] = None,
-    ) -> None:
-        """Request backup export and upload the result to Google Drive.
-    def export_backup(
-        self,
-        app_name: str,
-        drive_folder_id: Optional[str] = None,
         remote: Optional[str] = None,
     ) -> None:
         """Request backup export and upload the result to Google Drive."""
@@ -95,7 +88,7 @@ class BackupClient:
             text=True,
             check=True,
         )
-        lines = [l for l in result.stdout.splitlines() if l.strip()]
+        lines = [line for line in result.stdout.splitlines() if line.strip()]
         backups: list[tuple[datetime.datetime, str]] = []
         for line in lines:
             parts = line.split(None, 3)

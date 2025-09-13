@@ -7,6 +7,7 @@ from apscheduler.triggers.cron import CronTrigger
 from .database import Base, SessionLocal, engine
 from .models import App
 from orchestrator.scheduler import start as start_scheduler, schedule_app_backups
+from orchestrator.services import rclone
 
 
 def create_app() -> Flask:
@@ -75,6 +76,38 @@ def create_app() -> Flask:
             db.commit()
         schedule_app_backups()
         return {"status": "ok"}, 201
+
+    @app.get("/rclone/remotes")
+    def get_remotes() -> tuple[dict, int]:
+        """List configured rclone remotes."""
+        try:
+            remotes = rclone.list_remotes()
+        except Exception as exc:  # pragma: no cover - defensive
+            return {"error": str(exc)}, 500
+        return {"remotes": remotes}, 200
+
+    @app.post("/rclone/remotes")
+    def create_remote_endpoint() -> tuple[dict, int]:
+        """Create a new rclone remote from JSON payload."""
+        data = request.get_json(force=True) or {}
+        name = data.get("name")
+        params = data.get("params")
+        if not name or not isinstance(params, dict):
+            return {"error": "invalid payload"}, 400
+        try:
+            rclone.create_remote(name, params)
+        except Exception as exc:  # pragma: no cover - defensive
+            return {"error": str(exc)}, 500
+        return {"status": "ok"}, 201
+
+    @app.delete("/rclone/remotes/<name>")
+    def delete_remote_endpoint(name: str) -> tuple[dict, int]:
+        """Delete an existing rclone remote."""
+        try:
+            rclone.delete_remote(name)
+        except Exception as exc:  # pragma: no cover - defensive
+            return {"error": str(exc)}, 500
+        return {"status": "ok"}, 200
 
     return app
 
