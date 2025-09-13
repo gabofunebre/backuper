@@ -44,19 +44,16 @@ class BackupClient:
         self,
         app_name: str,
         drive_folder_id: Optional[str] = None,
-        retention: Optional[int] = None,
-    ) -> None:
-        """Request backup export and upload the result to Google Drive.
-    def export_backup(
-        self,
-        app_name: str,
-        drive_folder_id: Optional[str] = None,
         remote: Optional[str] = None,
     ) -> None:
         """Request backup export and upload the result to Google Drive."""
+        params = {}
+        if drive_folder_id:
+            params["drive_folder_id"] = drive_folder_id
         resp = requests.post(
             f"{self.base_url}/backup/export",
             headers=self._headers(),
+            params=params or None,
             stream=True,
             timeout=300,
         )

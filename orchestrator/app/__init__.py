@@ -30,6 +30,11 @@ def create_app() -> Flask:
         """Render main panel."""
         return render_template("index.html")
 
+    @app.route("/remotes")
+    def remotes() -> str:
+        """Render rclone remotes management page."""
+        return render_template("remotes.html")
+
     @app.get("/apps")
     def list_apps() -> list[dict]:
         """Return registered apps as JSON."""
