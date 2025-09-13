@@ -8,6 +8,18 @@ Orquestador liviano que:
 
 ---
 
+## API Rápida
+
+El proyecto incluye un servicio FastAPI para registrar aplicaciones a respaldar.
+
+### Ejecutar
+
+```bash
+uvicorn app.main:app --reload
+```
+
+La documentación OpenAPI está disponible en `http://localhost:8000/docs`.
+
 ## 1) Requisitos
 - Docker y Docker Compose.
 - Una cuenta de Google Drive (del orquestador; **no hay usuarios finales en Drive**).
