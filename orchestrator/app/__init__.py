@@ -1,6 +1,7 @@
 import os
 from flask import Flask, render_template, request, jsonify
 from dotenv import load_dotenv
+from sqlalchemy import inspect, text
 
 from .database import Base, SessionLocal, engine
 from .models import App
@@ -12,6 +13,13 @@ def create_app() -> Flask:
     load_dotenv()
     app = Flask(__name__)
     Base.metadata.create_all(bind=engine)
+    inspector = inspect(engine)
+    columns = [col["name"] for col in inspector.get_columns("apps")]
+    with engine.begin() as conn:
+        if "drive_folder_id" not in columns:
+            conn.execute(text("ALTER TABLE apps ADD COLUMN drive_folder_id VARCHAR"))
+        if "retention" not in columns:
+            conn.execute(text("ALTER TABLE apps ADD COLUMN retention INTEGER"))
     start_scheduler()
 
     @app.route("/")
@@ -30,6 +38,9 @@ def create_app() -> Flask:
                     "url": a.url,
                     "token": a.token,
                     "schedule": a.schedule,
+                    "drive_folder_id": a.drive_folder_id,
+                    "retention": a.retention,
+
                 }
                 for a in apps
             ])
@@ -45,6 +56,8 @@ def create_app() -> Flask:
             url=data.get("url"),
             token=data.get("token"),
             schedule=data.get("schedule"),
+            drive_folder_id=data.get("drive_folder_id"),
+            retention=data.get("retention"),
         )
         with SessionLocal() as db:
             db.add(new_app)

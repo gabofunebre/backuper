@@ -1,7 +1,6 @@
 import os
 import subprocess
 from typing import Iterable
-
 import requests
 
 
@@ -25,7 +24,7 @@ class BackupClient:
         data = resp.json()
         return data.get("ready", False)
 
-    def export_backup(self, app_name: str) -> None:
+    def export_backup(self, app_name: str, drive_folder_id: Optional[str] = None) -> None:
         """Request backup export and upload the result to Google Drive."""
         resp = requests.post(
             f"{self.base_url}/backup/export",
@@ -52,3 +51,4 @@ class BackupClient:
             returncode = proc.wait()
         if returncode != 0:
             raise RuntimeError(f"rclone exited with status {returncode}")
+

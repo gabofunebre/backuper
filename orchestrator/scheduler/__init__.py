@@ -29,12 +29,12 @@ def schedule_app_backups() -> None:
 def run_backup(app_id: int) -> None:
     """Execute backup for the given app id."""
     with SessionLocal() as db:
-        app = db.query(App).get(app_id)
+        app = db.get(App, app_id)
         if not app:
             return
     client = BackupClient(app.url, app.token)
     if client.check_capabilities():
-        client.export_backup(app.name)
+        client.export_backup(app.name, app.drive_folder_id)
 
 
 def start() -> None:
