@@ -88,7 +88,7 @@ class BackupClient:
             text=True,
             check=True,
         )
-        lines = [l for l in result.stdout.splitlines() if l.strip()]
+        lines = [line for line in result.stdout.splitlines() if line.strip()]
         backups: list[tuple[datetime.datetime, str]] = []
         for line in lines:
             parts = line.split(None, 3)

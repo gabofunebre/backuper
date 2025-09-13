@@ -77,7 +77,6 @@ def create_app() -> Flask:
             db.commit()
         schedule_app_backups()
         return {"status": "ok"}, 201
-
     @app.post("/rclone/remotes/<name>/authorize")
     def authorize_remote(name: str):
         """Initiate or complete authorization for an rclone remote."""
