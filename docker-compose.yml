@@ -6,26 +6,6 @@ services:
     container_name: backuper
     volumes:
       - backups:/backups
-    ports:
-      - "8000:8000"
-    networks:
-      - backups_net
-
-  app1:
-    image: alpine
-    container_name: app1
-    command: sh -c "echo 'app1 data' > /data.txt && tail -f /dev/null"
-    volumes:
-      - backups:/backups
-    networks:
-      - backups_net
-
-  app2:
-    image: alpine
-    container_name: app2
-    command: sh -c "echo 'app2 data' > /data.txt && tail -f /dev/null"
-    volumes:
-      - backups:/backups
     networks:
       - backups_net
 
@@ -35,3 +15,4 @@ volumes:
 networks:
   backups_net:
     driver: bridge
+    name: backups_net
