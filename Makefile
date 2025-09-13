@@ -4,7 +4,7 @@ APP_SVC ?= orchestrator
 DOCKER_COMPOSE ?= docker compose
 MSG ?= update
 
-.PHONY: help up down down-v start stop restart ps logs shell rebuild rebuild-v push pull prune run
+.PHONY: help up down down-v start stop restart ps logs shell rebuild rebuild-v push pull prune run lint
 
 help:
 	@echo "Comandos disponibles:"
@@ -29,6 +29,7 @@ help:
 	@echo "  make pull           - Hace pull desde main"
 	@echo ""
 	@echo "Utilidades:"
+	@echo "  make lint     - Ejecuta el linter sobre el código"
 	@echo "  make prune    - Limpia recursos docker sin usar"
 	@echo "  make run cmd  - Ejecuta un comando dentro del contenedor principal (ej: make run ls -la)"
 
@@ -82,6 +83,10 @@ pull:
 # Utilidades
 prune:
 	docker system prune
+
+# Linter
+lint:
+	ruff check orchestrator/
 
 # Ejecutar comando dentro del contenedor
 run:
