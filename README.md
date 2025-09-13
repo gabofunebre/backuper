@@ -1,7 +1,7 @@
 # Backup Orchestrator (Docker)
 
 Orquestador liviano que:
-- Exponde **UI web** (puerto 5550 por defecto, configurable con `PORT`) para registrar apps y programar respaldos.
+- Exponde **UI web** (puerto 5550 por defecto, configurable con `APP_PORT`) para registrar apps y programar respaldos.
 - Se conecta por red **`backups_net`** a cada app que **opta por backup**.
 - Pide el backup por HTTP al endpoint de la app y **sube a la nube** (inicio: Google Drive).
 - Aplica **retención**, guarda **logs** y permite **“Probar ahora”**.
@@ -11,20 +11,7 @@ Orquestador liviano que:
 
 ## Puertos
 
-- **FastAPI** escucha en el puerto `8000`.
 - La interfaz **Flask** del orquestador escucha en el puerto `5550`.
-
-## API Rápida
-
-El proyecto incluye un servicio FastAPI para registrar aplicaciones a respaldar.
-
-### Ejecutar
-
-```bash
-uvicorn app.main:app --reload
-```
-
-La documentación OpenAPI está disponible en `http://localhost:8000/docs`.
 
 
 ## 1) Requisitos
