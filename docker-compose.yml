@@ -2,6 +2,9 @@ services:
   backuper:
     build: .
     container_name: backuper
+    ports:
+      - "8000:8000"  # FastAPI API
+      - "5550:5550"  # Flask UI
     volumes:
       - backups:/backups
     networks:

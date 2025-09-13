@@ -8,6 +8,11 @@ Orquestador liviano que:
 
 ---
 
+## Puertos
+
+- **FastAPI** escucha en el puerto `8000`.
+- La interfaz **Flask** del orquestador escucha en el puerto `5550`.
+
 ## API Rápida
 
 El proyecto incluye un servicio FastAPI para registrar aplicaciones a respaldar.
