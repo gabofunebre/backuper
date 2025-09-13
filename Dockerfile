@@ -10,4 +10,5 @@ COPY orchestrator ./orchestrator
 
 EXPOSE 5550
 
+# Run the orchestrator using the package's __main__ entry point
 CMD ["python", "-m", "orchestrator.app"]
