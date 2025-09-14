@@ -40,7 +40,9 @@ funcionalidades ofrece cada sección.
 ## 3. Configurar rclone
 1. Ingresar a **Rclone → Configurar** para ejecutar el asistente `rclone config`
    directamente desde la UI.
-2. Seguir los pasos para crear un *remote* (ej.: `gdrive`).
+2. Completar **Nombre** y elegir el **Tipo** de backend (por ejemplo `drive`,
+   `s3`, `webdav`) desde el desplegable para crear un *remote*.
+
 3. Los remotes existentes se listan en **Rclone → Remotes**, donde se puede
    comprobar que hayan quedado registrados correctamente.
 
