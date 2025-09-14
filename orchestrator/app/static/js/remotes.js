@@ -13,6 +13,10 @@ async function loadRemotes() {
   if (select) {
     select.innerHTML = '<option value=""></option>';
   }
+  const authSelect = document.getElementById('auth_remote');
+  if (authSelect) {
+    authSelect.innerHTML = '<option value=""></option>';
+  }
   remotes.forEach(name => {
     if (tbody) {
       const tr = document.createElement('tr');
@@ -24,6 +28,12 @@ async function loadRemotes() {
       opt.value = name;
       opt.textContent = name;
       select.appendChild(opt);
+    }
+    if (authSelect) {
+      const opt2 = document.createElement('option');
+      opt2.value = name;
+      opt2.textContent = name;
+      authSelect.appendChild(opt2);
     }
   });
 }
@@ -50,6 +60,45 @@ document.addEventListener('DOMContentLoaded', () => {
       if (resp.ok) {
         form.reset();
         loadRemotes();
+      }
+    });
+  }
+
+  const startBtn = document.getElementById('start-auth');
+  if (startBtn) {
+    startBtn.addEventListener('click', async () => {
+      const name = document.getElementById('auth_remote').value;
+      if (!name) return;
+      const resp = await fetch(`/rclone/remotes/${name}/authorize`);
+      if (resp.status === 401) {
+        window.location.href = '/login';
+        return;
+      }
+      const data = await resp.json();
+      if (data.url) {
+        window.open(data.url, '_blank');
+      }
+    });
+  }
+
+  const finishBtn = document.getElementById('finish-auth');
+  if (finishBtn) {
+    finishBtn.addEventListener('click', async () => {
+      const name = document.getElementById('auth_remote').value;
+      const token = document.getElementById('auth_token').value;
+      if (!name || !token) return;
+      const resp = await fetch(`/rclone/remotes/${name}/authorize`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token })
+      });
+      if (resp.status === 401) {
+        window.location.href = '/login';
+        return;
+      }
+      if (resp.ok) {
+        document.getElementById('auth_token').value = '';
+        alert('Remote authorized');
       }
     });
   }
