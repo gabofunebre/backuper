@@ -150,6 +150,9 @@ def create_app() -> Flask:
         data = request.get_json(force=True)
         if not data or not data.get("name") or not data.get("type"):
             return {"error": "invalid payload"}, 400
+        allowed_types = {"drive", "onedrive", "sftp", "local"}
+        if data["type"] not in allowed_types:
+            return {"error": "unsupported remote type"}, 400
         try:
             run_rclone(["config", "create", data["name"], data["type"]], check=True)
         except RuntimeError:
