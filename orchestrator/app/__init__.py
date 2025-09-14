@@ -16,7 +16,11 @@ from apscheduler.triggers.cron import CronTrigger
 
 from .database import Base, SessionLocal, engine
 from .models import App
-from orchestrator.scheduler import start as start_scheduler, schedule_app_backups
+from orchestrator.scheduler import (
+    start as start_scheduler,
+    schedule_app_backups,
+    run_backup,
+)
 from orchestrator.services.rclone import authorize_drive
 
 
@@ -81,6 +85,24 @@ def create_app() -> Flask:
         """Render rclone remotes management page."""
         return render_template("remotes.html")
 
+    @app.route("/rclone/config")
+    @login_required
+    def rclone_config() -> str:
+        """Render rclone remote configuration page."""
+        return render_template("rclone_config.html")
+
+    @app.route("/logs")
+    @login_required
+    def logs() -> str:
+        """Display application logs."""
+        path = os.getenv("APP_LOG_FILE", "app.log")
+        try:
+            with open(path, "r", encoding="utf-8") as fh:
+                content = fh.read()
+        except FileNotFoundError:
+            content = ""
+        return render_template("logs.html", logs=content)
+
     @app.get("/apps")
     @login_required
     def list_apps() -> list[dict]:
@@ -89,6 +111,7 @@ def create_app() -> Flask:
             apps = db.query(App).all()
             return jsonify([
                 {
+                    "id": a.id,
                     "name": a.name,
                     "url": a.url,
                     "token": a.token,
@@ -159,6 +182,60 @@ def create_app() -> Flask:
             db.commit()
         schedule_app_backups()
         return {"status": "ok"}, 201
+
+    @app.put("/apps/<int:app_id>")
+    @login_required
+    def update_app(app_id: int):
+        data = request.get_json(force=True)
+        if not data:
+            return {"error": "invalid payload"}, 400
+        schedule = data.get("schedule") or None
+        if schedule:
+            try:
+                CronTrigger.from_crontab(schedule)
+            except ValueError:
+                return {"error": "invalid schedule"}, 400
+        remote = data.get("rclone_remote")
+        if remote:
+            result = subprocess.run(
+                ["rclone", "listremotes"], capture_output=True, text=True, check=True
+            )
+            available = [r.strip() for r in result.stdout.splitlines() if r.strip()]
+            normalized = remote if remote.endswith(":") else f"{remote}:"
+            if normalized not in available:
+                return {"error": "unknown rclone remote"}, 400
+        with SessionLocal() as db:
+            app_obj = db.get(App, app_id)
+            if not app_obj:
+                return {"error": "not found"}, 404
+            app_obj.name = data.get("name")
+            app_obj.url = data.get("url")
+            app_obj.token = data.get("token")
+            app_obj.schedule = schedule
+            app_obj.drive_folder_id = data.get("drive_folder_id")
+            app_obj.rclone_remote = remote
+            app_obj.retention = data.get("retention")
+            db.commit()
+        schedule_app_backups()
+        return {"status": "ok"}, 200
+
+    @app.delete("/apps/<int:app_id>")
+    @login_required
+    def delete_app(app_id: int):
+        with SessionLocal() as db:
+            app_obj = db.get(App, app_id)
+            if not app_obj:
+                return {"error": "not found"}, 404
+            db.delete(app_obj)
+            db.commit()
+        schedule_app_backups()
+        return {"status": "ok"}, 200
+
+    @app.post("/apps/<int:app_id>/run")
+    @login_required
+    def run_app_backup(app_id: int):
+        run_backup(app_id)
+        return {"status": "started"}, 202
 
     @app.post("/rclone/remotes/<name>/authorize")
     @login_required

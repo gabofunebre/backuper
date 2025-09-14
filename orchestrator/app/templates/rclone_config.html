@@ -1,0 +1,29 @@
+{% extends 'base.html' %}
+
+{% block content %}
+<div class="container py-4">
+  <h1 class="mb-4">Configurar Rclone</h1>
+  <form id="remote-form">
+    <div class="mb-3">
+      <label for="remote_name" class="form-label">Nombre</label>
+      <input type="text" class="form-control" id="remote_name" required>
+    </div>
+    <div class="mb-3">
+      <label for="remote_type" class="form-label">Tipo</label>
+      <input type="text" class="form-control" id="remote_type" required>
+    </div>
+    <button type="submit" class="btn btn-primary">Guardar</button>
+  </form>
+  <h2 class="mt-5">Autorizar Remote</h2>
+  <div class="mb-3">
+    <label for="auth_remote" class="form-label">Remote</label>
+    <select class="form-select" id="auth_remote"></select>
+  </div>
+  <button id="start-auth" class="btn btn-secondary mb-3">Iniciar autorización</button>
+  <div class="mb-3">
+    <label for="auth_token" class="form-label">Token</label>
+    <textarea id="auth_token" class="form-control" rows="3"></textarea>
+  </div>
+  <button id="finish-auth" class="btn btn-primary">Finalizar autorización</button>
+</div>
+{% endblock %}
