@@ -10,6 +10,9 @@ sys.path.append(os.path.dirname(os.path.dirname(__file__)))
 @pytest.fixture
 def app(monkeypatch):
     monkeypatch.setenv("DATABASE_URL", "sqlite://")
+    monkeypatch.setenv("APP_ADMIN_USER", "admin")
+    monkeypatch.setenv("APP_ADMIN_PASS", "secret")
+    monkeypatch.setenv("APP_SECRET_KEY", "test-key")
     app_module = importlib.import_module("orchestrator.app")
     db_module = importlib.import_module("orchestrator.app.database")
     models_module = importlib.import_module("orchestrator.app.models")
@@ -35,6 +38,7 @@ def test_list_rclone_remotes(monkeypatch, app):
 
     monkeypatch.setattr(subprocess, "run", fake_run)
     client = app.test_client()
+    client.post("/login", data={"username": "admin", "password": "secret"})
     resp = client.get("/rclone/remotes")
     assert resp.status_code == 200
     assert resp.get_json() == ["gdrive", "other"]
@@ -49,6 +53,7 @@ def test_register_app_with_remote(monkeypatch, app):
 
     monkeypatch.setattr(subprocess, "run", fake_run)
     client = app.test_client()
+    client.post("/login", data={"username": "admin", "password": "secret"})
     payload = {
         "name": "remoteapp",
         "url": "http://remoteapp",

@@ -1,5 +1,9 @@
 async function loadRemotes() {
   const resp = await fetch('/rclone/remotes');
+  if (resp.status === 401) {
+    window.location.href = '/login';
+    return;
+  }
   const remotes = await resp.json();
   const tbody = document.querySelector('#remotes-table tbody');
   if (tbody) {
@@ -39,6 +43,10 @@ document.addEventListener('DOMContentLoaded', () => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
       });
+      if (resp.status === 401) {
+        window.location.href = '/login';
+        return;
+      }
       if (resp.ok) {
         form.reset();
         loadRemotes();
