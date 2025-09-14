@@ -1,6 +1,15 @@
 import os
 import subprocess
-from flask import Flask, render_template, request, jsonify
+from functools import wraps
+from flask import (
+    Flask,
+    render_template,
+    request,
+    jsonify,
+    redirect,
+    session,
+    url_for,
+)
 from dotenv import load_dotenv
 from sqlalchemy import inspect, text
 from apscheduler.triggers.cron import CronTrigger
@@ -27,17 +36,53 @@ def create_app() -> Flask:
             conn.execute(text("ALTER TABLE apps ADD COLUMN retention INTEGER"))
     start_scheduler()
 
+    admin_user = os.getenv("APP_ADMIN_USER")
+    admin_pass = os.getenv("APP_ADMIN_PASS")
+    app.secret_key = os.getenv("APP_SECRET_KEY", "devkey")
+
+    def login_required(func):
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            if session.get("logged_in"):
+                return func(*args, **kwargs)
+            accept = request.accept_mimetypes
+            if accept["application/json"] >= accept["text/html"]:
+                return {"error": "unauthorized"}, 401
+            return redirect(url_for("login"))
+
+        return wrapper
+
+    @app.route("/login", methods=["GET", "POST"])
+    def login():
+        error = None
+        if request.method == "POST":
+            username = request.form.get("username")
+            password = request.form.get("password")
+            if username == admin_user and password == admin_pass:
+                session["logged_in"] = True
+                return redirect(url_for("index"))
+            error = "invalid credentials"
+        return render_template("login.html", error=error), (401 if error else 200)
+
+    @app.get("/logout")
+    def logout():
+        session.clear()
+        return redirect(url_for("login"))
+
     @app.route("/")
+    @login_required
     def index() -> str:
         """Render main panel."""
         return render_template("index.html")
 
     @app.route("/remotes")
+    @login_required
     def remotes() -> str:
         """Render rclone remotes management page."""
         return render_template("remotes.html")
 
     @app.get("/apps")
+    @login_required
     def list_apps() -> list[dict]:
         """Return registered apps as JSON."""
         with SessionLocal() as db:
@@ -51,12 +96,12 @@ def create_app() -> Flask:
                     "drive_folder_id": a.drive_folder_id,
                     "rclone_remote": a.rclone_remote,
                     "retention": a.retention,
-
                 }
                 for a in apps
             ])
 
     @app.get("/rclone/remotes")
+    @login_required
     def list_rclone_remotes() -> list[str]:
         """Return available rclone remotes."""
         result = subprocess.run(
@@ -65,7 +110,21 @@ def create_app() -> Flask:
         remotes = [r.strip().rstrip(":") for r in result.stdout.splitlines() if r.strip()]
         return jsonify(remotes)
 
+    @app.post("/rclone/remotes")
+    @login_required
+    def create_rclone_remote() -> tuple[dict, int]:
+        """Create a new rclone remote."""
+        data = request.get_json(force=True)
+        if not data or not data.get("name") or not data.get("type"):
+            return {"error": "invalid payload"}, 400
+        subprocess.run(
+            ["rclone", "config", "create", data["name"], data["type"]],
+            check=True,
+        )
+        return {"status": "ok"}, 201
+
     @app.post("/apps")
+    @login_required
     def register_app() -> tuple[dict, int]:
         """Register a new app from JSON payload."""
         data = request.get_json(force=True)
@@ -100,7 +159,9 @@ def create_app() -> Flask:
             db.commit()
         schedule_app_backups()
         return {"status": "ok"}, 201
+
     @app.post("/rclone/remotes/<name>/authorize")
+    @login_required
     def authorize_remote(name: str):
         """Initiate or complete authorization for an rclone remote."""
         data = request.get_json(silent=True) or {}
