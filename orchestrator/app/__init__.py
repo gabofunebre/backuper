@@ -45,7 +45,8 @@ def create_app() -> Flask:
         def wrapper(*args, **kwargs):
             if session.get("logged_in"):
                 return func(*args, **kwargs)
-            if request.accept_mimetypes.accept_json:
+            accept = request.accept_mimetypes
+            if accept["application/json"] >= accept["text/html"]:
                 return {"error": "unauthorized"}, 401
             return redirect(url_for("login"))
 
