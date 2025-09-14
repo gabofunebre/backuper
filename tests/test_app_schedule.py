@@ -6,6 +6,9 @@ import pytest
 def client(monkeypatch, tmp_path):
     db_path = tmp_path / "test.db"
     monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_path}")
+    monkeypatch.setenv("APP_ADMIN_USER", "admin")
+    monkeypatch.setenv("APP_ADMIN_PASS", "secret")
+    monkeypatch.setenv("APP_SECRET_KEY", "test-key")
     from orchestrator import app as app_module
     from orchestrator.app import database as db_module
     from orchestrator.app import models as models_module
@@ -17,6 +20,7 @@ def client(monkeypatch, tmp_path):
     flask_app = app_module.create_app()
     flask_app.config["TESTING"] = True
     with flask_app.test_client() as client:
+        client.post("/login", data={"username": "admin", "password": "secret"})
         yield client
 
 
