@@ -6,6 +6,8 @@ Orquestador liviano que:
 - Pide el backup por HTTP al endpoint de la app y **sube a la nube** (inicio: Google Drive).
 - Aplica **retención**, guarda **logs** y permite **“Probar ahora”**.
 
+> Para una introducción paso a paso a la interfaz web, consultá la [Guía de uso de la UI](docs/ui_usage.md).
+
 ---
 
 
