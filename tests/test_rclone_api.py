@@ -92,3 +92,11 @@ def test_create_rclone_remote_missing_binary(monkeypatch, app):
     )
     assert resp.status_code == 500
     assert resp.get_json() == {"error": "rclone is not installed"}
+
+
+def test_create_rclone_remote_unsupported_type(app):
+    client = app.test_client()
+    client.post("/login", data={"username": "admin", "password": "secret"})
+    resp = client.post("/rclone/remotes", json={"name": "foo", "type": "s3"})
+    assert resp.status_code == 400
+    assert resp.get_json() == {"error": "unsupported remote type"}

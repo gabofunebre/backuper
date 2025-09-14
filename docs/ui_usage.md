@@ -40,11 +40,12 @@ funcionalidades ofrece cada sección.
 ## 3. Configurar rclone
 1. Ingresar a **Rclone → Configurar** para ejecutar el asistente `rclone config`
    directamente desde la UI.
-2. Completar **Nombre** y elegir el **Tipo** de backend (por ejemplo `drive`,
-   `s3`, `webdav`) desde el desplegable para crear un *remote*.
+2. Completar **Nombre** y elegir el **Tipo** de backend (`drive`,
+   `onedrive`, `sftp` o `local`) desde el desplegable para crear un *remote*.
 
 3. Los remotes existentes se listan en **Rclone → Remotes**, donde se puede
    comprobar que hayan quedado registrados correctamente.
+   - Para `sftp`, el contenedor puede alcanzar al host mediante `host.docker.internal` y se puede especificar el puerto `222` u otro durante la configuración.
 
 ## 4. Visor de logs
 - El enlace **Logs** muestra las últimas líneas del log del orquestador.
