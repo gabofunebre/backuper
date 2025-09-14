@@ -2,11 +2,24 @@ services:
   orchestrator:
     build: .
     container_name: backuper
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+      PORT: ${PORT}
+      APP_SECRET_KEY: ${APP_SECRET_KEY}
+      APP_ADMIN_USER: ${APP_ADMIN_USER}
+      APP_ADMIN_PASS: ${APP_ADMIN_PASS}
+      REQUEST_TIMEOUT_S: ${REQUEST_TIMEOUT_S}
+      BACKUP_MAX_SIZE_MB: ${BACKUP_MAX_SIZE_MB}
+      RCLONE_REMOTE: ${RCLONE_REMOTE}
     volumes:
       - backups:/backups
     networks:
       - backups_net
       - cloudflared_net
+    ports:
+      - "${PORT}:${PORT}"
 volumes:
   backups:
 networks:
