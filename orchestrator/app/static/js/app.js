@@ -1,5 +1,9 @@
 async function loadApps() {
   const resp = await fetch('/apps');
+  if (resp.status === 401) {
+    window.location.href = '/login';
+    return;
+  }
   const apps = await resp.json();
   const tbody = document.querySelector('#apps-table tbody');
   tbody.innerHTML = '';
@@ -29,6 +33,10 @@ document.addEventListener('DOMContentLoaded', () => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload)
     });
+    if (resp.status === 401) {
+      window.location.href = '/login';
+      return;
+    }
     if (resp.ok) {
       e.target.reset();
       const modal = bootstrap.Modal.getInstance(document.getElementById('appModal'));
