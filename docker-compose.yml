@@ -9,8 +9,6 @@ services:
     networks:
       - backups_net
       - cloudflared_net
-    ports:
-      - "${PORT:-5550}:${PORT:-5550}"
 volumes:
   backups:
 networks:
