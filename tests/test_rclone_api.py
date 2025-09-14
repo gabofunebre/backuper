@@ -66,3 +66,29 @@ def test_register_app_with_remote(monkeypatch, app):
     assert resp.status_code == 200
     apps = resp.get_json()
     assert any(a["name"] == "remoteapp" and a["rclone_remote"] == "gdrive:" for a in apps)
+
+
+def test_list_rclone_remotes_missing_binary(monkeypatch, app):
+    def fake_run(*args, **kwargs):
+        raise FileNotFoundError()
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    client = app.test_client()
+    client.post("/login", data={"username": "admin", "password": "secret"})
+    resp = client.get("/rclone/remotes")
+    assert resp.status_code == 500
+    assert resp.get_json() == {"error": "rclone is not installed"}
+
+
+def test_create_rclone_remote_missing_binary(monkeypatch, app):
+    def fake_run(*args, **kwargs):
+        raise FileNotFoundError()
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    client = app.test_client()
+    client.post("/login", data={"username": "admin", "password": "secret"})
+    resp = client.post(
+        "/rclone/remotes", json={"name": "foo", "type": "drive"}
+    )
+    assert resp.status_code == 500
+    assert resp.get_json() == {"error": "rclone is not installed"}

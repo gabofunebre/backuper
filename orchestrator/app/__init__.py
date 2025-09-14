@@ -103,6 +103,13 @@ def create_app() -> Flask:
             content = ""
         return render_template("logs.html", logs=content)
 
+    def run_rclone(args: list[str], **kwargs):
+        """Execute an rclone command, raising RuntimeError if missing."""
+        try:
+            return subprocess.run(["rclone", *args], **kwargs)
+        except FileNotFoundError as exc:
+            raise RuntimeError("rclone is not installed") from exc
+
     @app.get("/apps")
     @login_required
     def list_apps() -> list[dict]:
@@ -127,9 +134,12 @@ def create_app() -> Flask:
     @login_required
     def list_rclone_remotes() -> list[str]:
         """Return available rclone remotes."""
-        result = subprocess.run(
-            ["rclone", "listremotes"], capture_output=True, text=True, check=True
-        )
+        try:
+            result = run_rclone(
+                ["listremotes"], capture_output=True, text=True, check=True
+            )
+        except RuntimeError:
+            return {"error": "rclone is not installed"}, 500
         remotes = [r.strip().rstrip(":") for r in result.stdout.splitlines() if r.strip()]
         return jsonify(remotes)
 
@@ -140,10 +150,10 @@ def create_app() -> Flask:
         data = request.get_json(force=True)
         if not data or not data.get("name") or not data.get("type"):
             return {"error": "invalid payload"}, 400
-        subprocess.run(
-            ["rclone", "config", "create", data["name"], data["type"]],
-            check=True,
-        )
+        try:
+            run_rclone(["config", "create", data["name"], data["type"]], check=True)
+        except RuntimeError:
+            return {"error": "rclone is not installed"}, 500
         return {"status": "ok"}, 201
 
     @app.post("/apps")
@@ -161,9 +171,12 @@ def create_app() -> Flask:
                 return {"error": "invalid schedule"}, 400
         remote = data.get("rclone_remote")
         if remote:
-            result = subprocess.run(
-                ["rclone", "listremotes"], capture_output=True, text=True, check=True
-            )
+            try:
+                result = run_rclone(
+                    ["listremotes"], capture_output=True, text=True, check=True
+                )
+            except RuntimeError:
+                return {"error": "rclone is not installed"}, 500
             available = [r.strip() for r in result.stdout.splitlines() if r.strip()]
             normalized = remote if remote.endswith(":") else f"{remote}:"
             if normalized not in available:
@@ -197,9 +210,12 @@ def create_app() -> Flask:
                 return {"error": "invalid schedule"}, 400
         remote = data.get("rclone_remote")
         if remote:
-            result = subprocess.run(
-                ["rclone", "listremotes"], capture_output=True, text=True, check=True
-            )
+            try:
+                result = run_rclone(
+                    ["listremotes"], capture_output=True, text=True, check=True
+                )
+            except RuntimeError:
+                return {"error": "rclone is not installed"}, 500
             available = [r.strip() for r in result.stdout.splitlines() if r.strip()]
             normalized = remote if remote.endswith(":") else f"{remote}:"
             if normalized not in available:
@@ -244,10 +260,10 @@ def create_app() -> Flask:
         data = request.get_json(silent=True) or {}
         token = data.get("token")
         if token:
-            subprocess.run(
-                ["rclone", "config", "update", name, "token", token],
-                check=True,
-            )
+            try:
+                run_rclone(["config", "update", name, "token", token], check=True)
+            except RuntimeError:
+                return {"error": "rclone is not installed"}, 500
             return {"status": "ok"}, 200
         url = authorize_drive()
         return {"url": url}, 200
