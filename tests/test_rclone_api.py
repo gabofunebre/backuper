@@ -100,3 +100,43 @@ def test_create_rclone_remote_unsupported_type(app):
     resp = client.post("/rclone/remotes", json={"name": "foo", "type": "s3"})
     assert resp.status_code == 400
     assert resp.get_json() == {"error": "unsupported remote type"}
+
+
+def test_create_rclone_remote_success(monkeypatch, app):
+    calls = []
+
+    class DummyResult:
+        stderr = ""
+        stdout = ""
+
+    def fake_run(cmd, capture_output, text, check):
+        calls.append(cmd)
+        return DummyResult()
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    client = app.test_client()
+    client.post("/login", data={"username": "admin", "password": "secret"})
+    resp = client.post("/rclone/remotes", json={"name": "foo", "type": "drive"})
+    assert resp.status_code == 201
+    assert resp.get_json() == {"status": "ok"}
+    cmd = calls[0]
+    assert cmd[0] == "rclone"
+    assert "--non-interactive" in cmd
+    assert "config" in cmd
+    assert "create" in cmd
+    assert "foo" in cmd
+    assert "drive" in cmd
+    assert "scope" in cmd
+    assert "--no-auto-auth" in cmd
+
+
+def test_create_rclone_remote_failure(monkeypatch, app):
+    def fake_run(cmd, capture_output, text, check):
+        raise subprocess.CalledProcessError(1, cmd, stderr="boom")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    client = app.test_client()
+    client.post("/login", data={"username": "admin", "password": "secret"})
+    resp = client.post("/rclone/remotes", json={"name": "foo", "type": "drive"})
+    assert resp.status_code == 400
+    assert resp.get_json() == {"error": "boom"}
