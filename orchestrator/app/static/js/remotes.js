@@ -69,15 +69,32 @@ document.addEventListener('DOMContentLoaded', () => {
     startBtn.addEventListener('click', async () => {
       const name = document.getElementById('auth_remote').value;
       if (!name) return;
-      const resp = await fetch(`/rclone/remotes/${name}/authorize`);
+      const resp = await fetch(`/rclone/remotes/${name}/authorize`, { method: 'POST' });
       if (resp.status === 401) {
         window.location.href = '/login';
         return;
       }
       const data = await resp.json();
       if (data.url) {
-        window.open(data.url, '_blank');
+        const urlInput = document.getElementById('auth_url');
+        const link = document.getElementById('auth_link');
+        const container = document.getElementById('auth-url-container');
+        if (urlInput) urlInput.value = data.url;
+        if (link) {
+          link.href = data.url;
+          link.textContent = data.url;
+        }
+        if (container) container.style.display = '';
       }
+    });
+  }
+
+  const copyBtn = document.getElementById('copy-auth-url');
+  if (copyBtn) {
+    copyBtn.addEventListener('click', () => {
+      const input = document.getElementById('auth_url');
+      if (!input) return;
+      navigator.clipboard.writeText(input.value);
     });
   }
 
