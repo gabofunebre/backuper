@@ -256,20 +256,25 @@ def create_app() -> Flask:
         run_backup(app_id)
         return {"status": "started"}, 202
 
+    @app.get("/rclone/remotes/<name>/authorize")
+    @login_required
+    def authorize_remote_url(name: str):
+        url = authorize_drive()
+        return {"url": url}, 200
+
     @app.post("/rclone/remotes/<name>/authorize")
     @login_required
     def authorize_remote(name: str):
-        """Initiate or complete authorization for an rclone remote."""
+        """Complete authorization for an rclone remote."""
         data = request.get_json(silent=True) or {}
         token = data.get("token")
-        if token:
-            try:
-                run_rclone(["config", "update", name, "token", token], check=True)
-            except RuntimeError:
-                return {"error": "rclone is not installed"}, 500
-            return {"status": "ok"}, 200
-        url = authorize_drive()
-        return {"url": url}, 200
+        if not token:
+            return {"error": "invalid payload"}, 400
+        try:
+            run_rclone(["config", "update", name, "token", token], check=True)
+        except RuntimeError:
+            return {"error": "rclone is not installed"}, 500
+        return {"status": "ok"}, 200
 
     return app
 

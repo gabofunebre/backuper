@@ -17,7 +17,7 @@ def test_authorize_returns_url(monkeypatch):
     app = create_app()
     client = app.test_client()
     client.post("/login", data={"username": "admin", "password": "secret"})
-    resp = client.post("/rclone/remotes/foo/authorize", json={})
+    resp = client.get("/rclone/remotes/foo/authorize")
     assert resp.status_code == 200
     assert resp.get_json() == {"url": "http://auth"}
 
