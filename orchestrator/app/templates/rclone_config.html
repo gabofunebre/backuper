@@ -26,6 +26,13 @@
     <select class="form-select" id="auth_remote"></select>
   </div>
   <button id="start-auth" class="btn btn-secondary mb-3">Iniciar autorización</button>
+  <div id="auth-url-container" class="mb-3" style="display:none;">
+    <div class="input-group mb-2">
+      <input id="auth_url" type="text" class="form-control" readonly>
+      <button class="btn btn-outline-secondary" type="button" id="copy-auth-url">Copiar</button>
+    </div>
+    <a id="auth_link" href="#" target="_blank" class="d-block"></a>
+  </div>
   <div class="mb-3">
     <label for="auth_token" class="form-label">Token</label>
     <textarea id="auth_token" class="form-control" rows="3"></textarea>
