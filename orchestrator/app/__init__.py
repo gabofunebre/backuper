@@ -153,10 +153,30 @@ def create_app() -> Flask:
         allowed_types = {"drive", "onedrive", "sftp", "local"}
         if data["type"] not in allowed_types:
             return {"error": "unsupported remote type"}, 400
+        config_file = os.getenv("RCLONE_CONFIG", "/config/rclone/rclone.conf")
+        defaults: dict[str, list[str]] = {
+            "drive": ["scope", "drive", "--no-auto-auth"],
+            "onedrive": ["--no-auto-auth"],
+            "sftp": [],
+            "local": [],
+        }
+        args = [
+            "--non-interactive",
+            "--config",
+            config_file,
+            "config",
+            "create",
+            data["name"],
+            data["type"],
+            *defaults.get(data["type"], []),
+        ]
         try:
-            run_rclone(["config", "create", data["name"], data["type"]], check=True)
+            run_rclone(args, capture_output=True, text=True, check=True)
         except RuntimeError:
             return {"error": "rclone is not installed"}, 500
+        except subprocess.CalledProcessError as exc:
+            error = (exc.stderr or exc.stdout or "").strip() or "failed to create remote"
+            return {"error": error}, 400
         return {"status": "ok"}, 201
 
     @app.post("/apps")
