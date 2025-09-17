@@ -154,6 +154,9 @@ def create_app() -> Flask:
         if data["type"] not in allowed_types:
             return {"error": "unsupported remote type"}, 400
         config_file = os.getenv("RCLONE_CONFIG", "/config/rclone/rclone.conf")
+        config_dir = os.path.dirname(config_file)
+        if config_dir:
+            os.makedirs(config_dir, exist_ok=True)
         defaults: dict[str, list[str]] = {
             "drive": ["scope", "drive", "--no-auto-auth"],
             "onedrive": ["--no-auto-auth"],
