@@ -135,6 +135,33 @@ def test_create_rclone_remote_success(monkeypatch, app):
     assert "--no-auto-auth" in cmd
 
 
+def test_create_rclone_remote_nested_config_path(monkeypatch, app, tmp_path):
+    calls = []
+    nested_config = tmp_path / "deep" / "nested" / "rclone.conf"
+    assert not nested_config.parent.exists()
+
+    class DummyResult:
+        stderr = ""
+        stdout = ""
+
+    def fake_run(cmd, capture_output, text, check):
+        calls.append(cmd)
+        return DummyResult()
+
+    monkeypatch.setenv("RCLONE_CONFIG", str(nested_config))
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    client = app.test_client()
+    client.post("/login", data={"username": "admin", "password": "secret"})
+    resp = client.post("/rclone/remotes", json={"name": "foo", "type": "drive"})
+    assert resp.status_code == 201
+    assert resp.get_json() == {"status": "ok"}
+    assert nested_config.parent.is_dir()
+    cmd = calls[0]
+    assert "--config" in cmd
+    config_index = cmd.index("--config")
+    assert cmd[config_index + 1] == str(nested_config)
+
+
 def test_create_rclone_remote_failure(monkeypatch, app):
     def fake_run(cmd, capture_output, text, check):
         raise subprocess.CalledProcessError(1, cmd, stderr="boom")
