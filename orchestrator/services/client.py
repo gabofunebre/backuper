@@ -2,7 +2,16 @@ import datetime
 import os
 import subprocess
 from typing import Iterable, Optional
+
 import requests
+
+
+def _normalize_remote(remote: str) -> str:
+    """Ensure an rclone remote name ends with a trailing colon."""
+
+    if not remote.endswith(":"):
+        return f"{remote}:"
+    return remote
 
 
 class BackupClient:
@@ -66,7 +75,7 @@ class BackupClient:
         self, chunks: Iterable[bytes], filename: str, remote: Optional[str] = None
     ) -> None:
         """Upload an iterable of bytes to Google Drive using rclone rcat."""
-        remote = remote or os.environ.get("RCLONE_REMOTE", "drive:")
+        remote = _normalize_remote(remote or os.environ.get("RCLONE_REMOTE", "drive:"))
         cmd = ["rclone", "rcat", f"{remote}{filename}"]
         proc = subprocess.Popen(cmd, stdin=subprocess.PIPE)
         if proc.stdin is None:
@@ -85,7 +94,7 @@ class BackupClient:
         """Remove old backups exceeding the retention count for the given app."""
         if retention <= 0:
             return
-        remote = os.environ.get("RCLONE_REMOTE", "drive:")
+        remote = _normalize_remote(os.environ.get("RCLONE_REMOTE", "drive:"))
         result = subprocess.run(
             ["rclone", "lsl", remote],
             capture_output=True,

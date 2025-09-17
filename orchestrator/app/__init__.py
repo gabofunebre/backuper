@@ -21,6 +21,7 @@ from orchestrator.scheduler import (
     schedule_app_backups,
     run_backup,
 )
+from orchestrator.services.client import _normalize_remote
 from orchestrator.services.rclone import authorize_drive
 
 
@@ -206,9 +207,10 @@ def create_app() -> Flask:
             except RuntimeError:
                 return {"error": "rclone is not installed"}, 500
             available = [r.strip() for r in result.stdout.splitlines() if r.strip()]
-            normalized = remote if remote.endswith(":") else f"{remote}:"
+            normalized = _normalize_remote(remote)
             if normalized not in available:
                 return {"error": "unknown rclone remote"}, 400
+            remote = normalized
         new_app = App(
             name=data.get("name"),
             url=data.get("url"),
@@ -245,9 +247,10 @@ def create_app() -> Flask:
             except RuntimeError:
                 return {"error": "rclone is not installed"}, 500
             available = [r.strip() for r in result.stdout.splitlines() if r.strip()]
-            normalized = remote if remote.endswith(":") else f"{remote}:"
+            normalized = _normalize_remote(remote)
             if normalized not in available:
                 return {"error": "unknown rclone remote"}, 400
+            remote = normalized
         with SessionLocal() as db:
             app_obj = db.get(App, app_id)
             if not app_obj:

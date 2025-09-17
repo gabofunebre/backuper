@@ -60,7 +60,7 @@ def test_register_app_with_remote(monkeypatch, app):
         "name": "remoteapp",
         "url": "http://remoteapp",
         "token": "tok",
-        "rclone_remote": "gdrive:",
+        "rclone_remote": "gdrive",
     }
     resp = client.post("/apps", json=payload)
     assert resp.status_code == 201
