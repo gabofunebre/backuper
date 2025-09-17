@@ -136,9 +136,11 @@ def test_create_rclone_remote_success(monkeypatch, app):
 
 
 def test_create_rclone_remote_nested_config_path(monkeypatch, app, tmp_path):
-    calls = []
+    calls: list[list[str]] = []
     nested_config = tmp_path / "deep" / "nested" / "rclone.conf"
+    default_config = tmp_path / "default" / "nested" / "rclone.conf"
     assert not nested_config.parent.exists()
+    assert not default_config.parent.exists()
 
     class DummyResult:
         stderr = ""
@@ -148,18 +150,32 @@ def test_create_rclone_remote_nested_config_path(monkeypatch, app, tmp_path):
         calls.append(cmd)
         return DummyResult()
 
-    monkeypatch.setenv("RCLONE_CONFIG", str(nested_config))
     monkeypatch.setattr(subprocess, "run", fake_run)
     client = app.test_client()
     client.post("/login", data={"username": "admin", "password": "secret"})
+
+    monkeypatch.setenv("RCLONE_CONFIG", str(nested_config))
     resp = client.post("/rclone/remotes", json={"name": "foo", "type": "drive"})
     assert resp.status_code == 201
     assert resp.get_json() == {"status": "ok"}
     assert nested_config.parent.is_dir()
-    cmd = calls[0]
+    cmd = calls[-1]
     assert "--config" in cmd
     config_index = cmd.index("--config")
     assert cmd[config_index + 1] == str(nested_config)
+
+    calls.clear()
+    monkeypatch.delenv("RCLONE_CONFIG", raising=False)
+    app_module = importlib.import_module("orchestrator.app")
+    monkeypatch.setattr(app_module, "DEFAULT_RCLONE_CONFIG", str(default_config))
+    resp = client.post("/rclone/remotes", json={"name": "bar", "type": "drive"})
+    assert resp.status_code == 201
+    assert resp.get_json() == {"status": "ok"}
+    assert default_config.parent.is_dir()
+    cmd = calls[-1]
+    assert "--config" in cmd
+    config_index = cmd.index("--config")
+    assert cmd[config_index + 1] == str(default_config)
 
 
 def test_create_rclone_remote_failure(monkeypatch, app):
