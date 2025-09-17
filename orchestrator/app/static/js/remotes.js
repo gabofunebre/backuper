@@ -69,7 +69,7 @@ document.addEventListener('DOMContentLoaded', () => {
     startBtn.addEventListener('click', async () => {
       const name = document.getElementById('auth_remote').value;
       if (!name) return;
-      const resp = await fetch(`/rclone/remotes/${name}/authorize`, { method: 'POST' });
+      const resp = await fetch(`/rclone/remotes/${name}/authorize`);
       if (resp.status === 401) {
         window.location.href = '/login';
         return;
