@@ -22,7 +22,10 @@ from orchestrator.scheduler import (
     run_backup,
 )
 from orchestrator.services.client import _normalize_remote
-from orchestrator.services.rclone import authorize_drive
+from orchestrator.services.rclone import (
+    authorize_drive,
+    complete_drive_authorization,
+)
 
 
 DEFAULT_RCLONE_CONFIG = "/config/rclone/rclone.conf"
@@ -293,21 +296,39 @@ def create_app() -> Flask:
     @app.get("/rclone/remotes/<name>/authorize")
     @login_required
     def authorize_remote_url(name: str):
-        url = authorize_drive()
-        return {"url": url}, 200
+        try:
+            session_id, url = authorize_drive(name)
+        except RuntimeError as exc:
+            message = str(exc)
+            status = 500 if message == "rclone is not installed" else 400
+            return {"error": message}, status
+        return {"url": url, "session_id": session_id}, 200
 
     @app.post("/rclone/remotes/<name>/authorize")
     @login_required
     def authorize_remote(name: str):
         """Complete authorization for an rclone remote."""
         data = request.get_json(silent=True) or {}
-        token = data.get("token")
-        if not token:
+        session_id = data.get("session_id")
+        code = data.get("code")
+        if not session_id or not code:
             return {"error": "invalid payload"}, 400
         try:
-            run_rclone(["config", "update", name, "token", token], check=True)
+            token = complete_drive_authorization(session_id, code)
+        except RuntimeError as exc:
+            return {"error": str(exc)}, 400
+        try:
+            run_rclone(
+                ["config", "update", name, "token", token],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
         except RuntimeError:
             return {"error": "rclone is not installed"}, 500
+        except subprocess.CalledProcessError as exc:
+            error = (exc.stderr or exc.stdout or "").strip() or "failed to update remote"
+            return {"error": error}, 400
         return {"status": "ok"}, 200
 
     return app

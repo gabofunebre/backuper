@@ -1,3 +1,5 @@
+let currentAuthSessionId = null;
+
 async function loadRemotes() {
   const resp = await fetch('/rclone/remotes');
   if (resp.status === 401) {
@@ -69,22 +71,35 @@ document.addEventListener('DOMContentLoaded', () => {
     startBtn.addEventListener('click', async () => {
       const name = document.getElementById('auth_remote').value;
       if (!name) return;
+      const urlInput = document.getElementById('auth_url');
+      const link = document.getElementById('auth_link');
+      const container = document.getElementById('auth-url-container');
+      const codeInput = document.getElementById('auth_code');
       const resp = await fetch(`/rclone/remotes/${name}/authorize`);
       if (resp.status === 401) {
         window.location.href = '/login';
         return;
       }
-      const data = await resp.json();
-      if (data.url) {
-        const urlInput = document.getElementById('auth_url');
-        const link = document.getElementById('auth_link');
-        const container = document.getElementById('auth-url-container');
+      const data = await resp.json().catch(() => ({}));
+      if (resp.ok && data.url) {
         if (urlInput) urlInput.value = data.url;
         if (link) {
           link.href = data.url;
           link.textContent = data.url;
         }
         if (container) container.style.display = '';
+        currentAuthSessionId = data.session_id || null;
+        if (codeInput) codeInput.value = '';
+      } else {
+        if (container) container.style.display = 'none';
+        if (urlInput) urlInput.value = '';
+        if (link) {
+          link.removeAttribute('href');
+          link.textContent = '';
+        }
+        currentAuthSessionId = null;
+        const message = data && data.error ? data.error : 'No se pudo iniciar la autorización';
+        alert(message);
       }
     });
   }
@@ -102,20 +117,30 @@ document.addEventListener('DOMContentLoaded', () => {
   if (finishBtn) {
     finishBtn.addEventListener('click', async () => {
       const name = document.getElementById('auth_remote').value;
-      const token = document.getElementById('auth_token').value;
-      if (!name || !token) return;
+      const codeInput = document.getElementById('auth_code');
+      const code = codeInput ? codeInput.value : '';
+      if (!name || !code) return;
+      if (!currentAuthSessionId) {
+        alert('Inicie la autorización antes de completarla.');
+        return;
+      }
       const resp = await fetch(`/rclone/remotes/${name}/authorize`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ token })
+        body: JSON.stringify({ session_id: currentAuthSessionId, code })
       });
       if (resp.status === 401) {
         window.location.href = '/login';
         return;
       }
+      const data = await resp.json().catch(() => ({}));
       if (resp.ok) {
-        document.getElementById('auth_token').value = '';
+        if (codeInput) codeInput.value = '';
+        currentAuthSessionId = null;
         alert('Remote authorized');
+      } else {
+        const message = data && data.error ? data.error : 'No se pudo completar la autorización';
+        alert(message);
       }
     });
   }
