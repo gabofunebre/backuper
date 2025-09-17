@@ -6,11 +6,12 @@ from orchestrator.services.client import BackupClient
 
 def test_apply_retention_deletes_old(monkeypatch):
     client = BackupClient("http://url", "token")
-    monkeypatch.setenv("RCLONE_REMOTE", "drive:")
+    monkeypatch.setenv("RCLONE_REMOTE", "drive")
     deleted: list[str] = []
 
     def fake_run(cmd, capture_output=False, text=False, check=False):
         if cmd[:2] == ["rclone", "lsl"]:
+            assert cmd[2] == "drive:"
             return SimpleNamespace(
                 stdout=(
                     "100 2024-01-01 00:00:00 app_20240101.bak\n"
@@ -20,6 +21,7 @@ def test_apply_retention_deletes_old(monkeypatch):
                 returncode=0,
             )
         elif cmd[:2] == ["rclone", "delete"]:
+            assert cmd[2].startswith("drive:")
             deleted.append(cmd[2])
             return SimpleNamespace(returncode=0, stdout="")
         raise AssertionError("unexpected command")
@@ -31,11 +33,12 @@ def test_apply_retention_deletes_old(monkeypatch):
 
 def test_apply_retention_no_delete(monkeypatch):
     client = BackupClient("http://url", "token")
-    monkeypatch.setenv("RCLONE_REMOTE", "drive:")
+    monkeypatch.setenv("RCLONE_REMOTE", "drive")
     deleted: list[str] = []
 
     def fake_run(cmd, capture_output=False, text=False, check=False):
         if cmd[:2] == ["rclone", "lsl"]:
+            assert cmd[2] == "drive:"
             return SimpleNamespace(
                 stdout=(
                     "100 2024-01-01 00:00:00 app_20240101.bak\n"
@@ -44,6 +47,7 @@ def test_apply_retention_no_delete(monkeypatch):
                 returncode=0,
             )
         elif cmd[:2] == ["rclone", "delete"]:
+            assert cmd[2].startswith("drive:")
             deleted.append(cmd[2])
             return SimpleNamespace(returncode=0, stdout="")
         raise AssertionError("unexpected command")
