@@ -25,6 +25,9 @@ from orchestrator.services.client import _normalize_remote
 from orchestrator.services.rclone import authorize_drive
 
 
+DEFAULT_RCLONE_CONFIG = "/config/rclone/rclone.conf"
+
+
 def create_app() -> Flask:
     """Application factory for the backup orchestrator UI."""
     load_dotenv()
@@ -106,12 +109,15 @@ def create_app() -> Flask:
 
     def run_rclone(args: list[str], **kwargs):
         """Execute an rclone command, raising RuntimeError if missing."""
-        config_file = os.getenv("RCLONE_CONFIG", "/config/rclone/rclone.conf")
+        config_file = os.getenv("RCLONE_CONFIG", DEFAULT_RCLONE_CONFIG)
         supplied_config = any(
             arg == "--config" or arg.startswith("--config=") for arg in args
         )
         cmd = ["rclone"]
         if not supplied_config:
+            config_dir = os.path.dirname(config_file)
+            if config_dir:
+                os.makedirs(config_dir, exist_ok=True)
             cmd.extend(["--config", config_file])
         cmd.extend(args)
         try:
