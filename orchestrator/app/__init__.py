@@ -105,8 +105,16 @@ def create_app() -> Flask:
 
     def run_rclone(args: list[str], **kwargs):
         """Execute an rclone command, raising RuntimeError if missing."""
+        config_file = os.getenv("RCLONE_CONFIG", "/config/rclone/rclone.conf")
+        supplied_config = any(
+            arg == "--config" or arg.startswith("--config=") for arg in args
+        )
+        cmd = ["rclone"]
+        if not supplied_config:
+            cmd.extend(["--config", config_file])
+        cmd.extend(args)
         try:
-            return subprocess.run(["rclone", *args], **kwargs)
+            return subprocess.run(cmd, **kwargs)
         except FileNotFoundError as exc:
             raise RuntimeError("rclone is not installed") from exc
 
@@ -153,10 +161,6 @@ def create_app() -> Flask:
         allowed_types = {"drive", "onedrive", "sftp", "local"}
         if data["type"] not in allowed_types:
             return {"error": "unsupported remote type"}, 400
-        config_file = os.getenv("RCLONE_CONFIG", "/config/rclone/rclone.conf")
-        config_dir = os.path.dirname(config_file)
-        if config_dir:
-            os.makedirs(config_dir, exist_ok=True)
         defaults: dict[str, list[str]] = {
             "drive": ["scope", "drive", "--no-auto-auth"],
             "onedrive": ["--no-auto-auth"],
@@ -165,8 +169,6 @@ def create_app() -> Flask:
         }
         args = [
             "--non-interactive",
-            "--config",
-            config_file,
             "config",
             "create",
             data["name"],
