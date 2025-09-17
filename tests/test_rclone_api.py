@@ -13,6 +13,7 @@ def app(monkeypatch):
     monkeypatch.setenv("APP_ADMIN_USER", "admin")
     monkeypatch.setenv("APP_ADMIN_PASS", "secret")
     monkeypatch.setenv("APP_SECRET_KEY", "test-key")
+    monkeypatch.setenv("RCLONE_CONFIG", "/tmp/test-rclone.conf")
     app_module = importlib.import_module("orchestrator.app")
     db_module = importlib.import_module("orchestrator.app.database")
     models_module = importlib.import_module("orchestrator.app.models")
@@ -42,7 +43,8 @@ def test_list_rclone_remotes(monkeypatch, app):
     resp = client.get("/rclone/remotes")
     assert resp.status_code == 200
     assert resp.get_json() == ["gdrive", "other"]
-    assert calls == [["rclone", "listremotes"]]
+    config_path = os.getenv("RCLONE_CONFIG")
+    assert calls == [["rclone", "--config", config_path, "listremotes"]]
 
 
 def test_register_app_with_remote(monkeypatch, app):
@@ -121,6 +123,9 @@ def test_create_rclone_remote_success(monkeypatch, app):
     assert resp.get_json() == {"status": "ok"}
     cmd = calls[0]
     assert cmd[0] == "rclone"
+    config_path = os.getenv("RCLONE_CONFIG")
+    assert "--config" in cmd
+    assert cmd[cmd.index("--config") + 1] == config_path
     assert "--non-interactive" in cmd
     assert "config" in cmd
     assert "create" in cmd
