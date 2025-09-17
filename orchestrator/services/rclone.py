@@ -184,7 +184,7 @@ def complete_drive_authorization(session_id: str, code: str) -> str:
         _cleanup_session(session_id)
         raise RuntimeError("authorization session is no longer active")
 
-    submission = f"{code.rstrip('\n')}\n"
+    submission = code.rstrip("\n") + "\n"
     try:
         session.stdin.write(submission)
         session.stdin.flush()

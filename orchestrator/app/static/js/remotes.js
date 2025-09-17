@@ -71,6 +71,10 @@ document.addEventListener('DOMContentLoaded', () => {
     startBtn.addEventListener('click', async () => {
       const name = document.getElementById('auth_remote').value;
       if (!name) return;
+      const urlInput = document.getElementById('auth_url');
+      const link = document.getElementById('auth_link');
+      const container = document.getElementById('auth-url-container');
+      const codeInput = document.getElementById('auth_code');
       const resp = await fetch(`/rclone/remotes/${name}/authorize`);
       if (resp.status === 401) {
         window.location.href = '/login';
@@ -78,9 +82,6 @@ document.addEventListener('DOMContentLoaded', () => {
       }
       const data = await resp.json().catch(() => ({}));
       if (resp.ok && data.url) {
-        const urlInput = document.getElementById('auth_url');
-        const link = document.getElementById('auth_link');
-        const container = document.getElementById('auth-url-container');
         if (urlInput) urlInput.value = data.url;
         if (link) {
           link.href = data.url;
@@ -88,10 +89,14 @@ document.addEventListener('DOMContentLoaded', () => {
         }
         if (container) container.style.display = '';
         currentAuthSessionId = data.session_id || null;
-        const codeInput = document.getElementById('auth_code');
         if (codeInput) codeInput.value = '';
       } else {
         if (container) container.style.display = 'none';
+        if (urlInput) urlInput.value = '';
+        if (link) {
+          link.removeAttribute('href');
+          link.textContent = '';
+        }
         currentAuthSessionId = null;
         const message = data && data.error ? data.error : 'No se pudo iniciar la autorización';
         alert(message);
