@@ -33,7 +33,7 @@
 
     <div class="remote-panel d-none" data-remote-panel="sftp">
       <h2 class="h5">Servidor SFTP</h2>
-      <p class="text-muted">Ingresá los datos de conexión. Vamos a probar el acceso y crear una carpeta con el nombre del remote para guardar los respaldos.</p>
+      <p class="text-muted">Ingresá los datos de conexión. Vamos a listar las carpetas disponibles y crear ahí una carpeta con el nombre del remote para guardar los respaldos.</p>
       <div class="row g-3">
         <div class="col-md-6">
           <label for="sftp_host" class="form-label">Host</label>
@@ -53,7 +53,29 @@
         </div>
       </div>
       <div class="form-text mt-2">
-        Si dejás el puerto vacío se usará el valor por defecto (22). La carpeta <code>&lt;nombre del remote&gt;</code> se creará automáticamente en el servidor remoto.
+        Si dejás el puerto vacío se usará el valor por defecto (22).
+      </div>
+      <div class="mt-3">
+        <button type="button" class="btn btn-outline-secondary" id="sftp-browse">Probar conexión y listar carpetas</button>
+        <div id="sftp-browser-feedback" class="form-text mt-2 text-muted"></div>
+      </div>
+      <div id="sftp-browser-panel" class="border rounded p-3 mt-3 d-none">
+        <div class="d-flex flex-wrap justify-content-between align-items-center gap-2">
+          <div><span class="fw-semibold">Carpeta actual:</span> <span id="sftp-current-path">/</span></div>
+          <div class="d-flex gap-2">
+            <button type="button" class="btn btn-sm btn-outline-secondary" id="sftp-browser-up" disabled>Subir un nivel</button>
+            <button type="button" class="btn btn-sm btn-success" id="sftp-use-current">Usar esta carpeta</button>
+          </div>
+        </div>
+        <p class="form-text mt-2 mb-0">Hacé clic en una carpeta para ver su contenido.</p>
+        <ul class="list-group mt-3" id="sftp-directory-list"></ul>
+        <div id="sftp-empty" class="alert alert-warning mt-3 d-none" role="alert">
+          No encontramos subcarpetas en esta ubicación. Podés usarla igual para guardar los respaldos.
+        </div>
+      </div>
+      <input type="hidden" id="sftp_base_path" value="">
+      <div id="sftp-selected-path" class="form-text mt-2 text-muted">
+        Todavía no elegiste la carpeta donde se crearán los respaldos.
       </div>
     </div>
 
