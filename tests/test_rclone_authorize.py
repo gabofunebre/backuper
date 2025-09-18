@@ -199,6 +199,7 @@ def test_create_sftp_remote_success(monkeypatch):
             "port": "2222",
             "username": "backup",
             "password": "secret",
+            "base_path": "/srv/backups",
         },
     }
     resp = client.post("/rclone/remotes", json=payload)
@@ -213,10 +214,12 @@ def test_create_sftp_remote_success(monkeypatch):
     assert "user" in create_cmd and create_cmd[create_cmd.index("user") + 1] == "backup"
     assert "pass" in create_cmd and create_cmd[create_cmd.index("pass") + 1] == "secret"
     assert "port" in create_cmd and create_cmd[create_cmd.index("port") + 1] == "2222"
-    lsd_cmd = calls[1]["cmd"]
+    path_index = create_cmd.index("path")
+    assert create_cmd[path_index + 1] == "/srv/backups/sftp1"
+    mkdir_cmd = calls[1]["cmd"]
+    assert mkdir_cmd[-2:] == ["mkdir", "sftp1:"]
+    lsd_cmd = calls[2]["cmd"]
     assert lsd_cmd[-2:] == ["lsd", "sftp1:"]
-    mkdir_cmd = calls[2]["cmd"]
-    assert mkdir_cmd[-2:] == ["mkdir", "sftp1:sftp1"]
 
 
 def test_create_sftp_remote_missing_credentials(monkeypatch):
@@ -295,10 +298,13 @@ def test_create_sftp_remote_connection_failure(monkeypatch):
             "host": "sftp.internal",
             "username": "backup",
             "password": "secret",
+            "base_path": "/srv/backups",
         },
     }
     resp = client.post("/rclone/remotes", json=payload)
     assert resp.status_code == 400
-    assert resp.get_json() == {"error": "auth failed"}
+    assert resp.get_json() == {
+        "error": "No se pudo autenticar en el servidor SFTP. Verificá el usuario y la contraseña.",
+    }
     # Ensure cleanup attempted after failure
     assert any(cmd[-3:-1] == ["config", "delete"] for cmd in calls)

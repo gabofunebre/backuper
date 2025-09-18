@@ -43,7 +43,7 @@ La interfaz permite crear nuevos remotes sin abandonar el navegador.
 - Ingresá a **Rclone → Remotes** para ver el listado actual y el formulario de alta.
 - Completá **Nombre** y elegí el **Tipo** de backend (`drive`, `onedrive`, `sftp` o `local`). El formulario mostrará los campos necesarios según la opción seleccionada:
   - Para `local`, seleccioná una carpeta habilitada previamente en `RCLONE_LOCAL_DIRECTORIES`.
-  - Para `sftp`, ingresá host, puerto (opcional), usuario y contraseña. El orquestador valida el acceso creando una carpeta con el nombre del remote en el servidor remoto.
+- Para `sftp`, ingresá host, puerto (opcional), usuario y contraseña. Probá la conexión para listar las carpetas disponibles en el servidor y elegí dónde crear la carpeta del remote.
   - Para `drive`, pegá el token OAuth generado con rclone y utilizá el botón **Probar token** antes de guardar.
 - Al guardar, la UI invoca internamente `rclone config create` y actualiza el listado de remotes disponibles.
 

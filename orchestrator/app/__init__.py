@@ -1,4 +1,6 @@
+import json
 import os
+import posixpath
 import re
 import subprocess
 import tempfile
@@ -73,6 +75,55 @@ def create_app() -> Flask:
 
     def get_local_directories() -> list[dict[str, str]]:
         return _parse_directory_config(os.getenv("RCLONE_LOCAL_DIRECTORIES", ""))
+
+    def _normalize_sftp_base_path(value: str | None) -> str:
+        candidate = (value or "/").strip()
+        if not candidate or candidate in {".", "./"}:
+            return "/"
+        candidate = candidate.replace("\\", "/")
+        if not candidate.startswith("/"):
+            candidate = f"/{candidate}"
+        while "//" in candidate:
+            candidate = candidate.replace("//", "/")
+        if len(candidate) > 1 and candidate.endswith("/"):
+            candidate = candidate.rstrip("/")
+        return candidate or "/"
+
+    def _join_sftp_folder(base_path: str, folder: str) -> str:
+        safe_folder = (folder or "").strip().strip("/")
+        if not safe_folder:
+            raise ValueError("invalid folder name")
+        normalized_base = _normalize_sftp_base_path(base_path)
+        if normalized_base == "/":
+            return f"/{safe_folder}"
+        return f"{normalized_base}/{safe_folder}"
+
+    def _parent_sftp_path(path: str | None) -> str:
+        normalized = _normalize_sftp_base_path(path)
+        if normalized == "/":
+            return "/"
+        parent = posixpath.dirname(normalized)
+        if not parent:
+            return "/"
+        return parent
+
+    def _translate_sftp_error(message: str) -> str:
+        text = (message or "").strip()
+        if not text:
+            return "No se pudo completar la operación con el servidor SFTP."
+        lowered = text.lower()
+        if "permission denied" in lowered:
+            return (
+                "El usuario SFTP no tiene permisos suficientes en esa carpeta. "
+                "Probá con otra ubicación o ajustá los permisos en el servidor."
+            )
+        if "authentication" in lowered or "access denied" in lowered or "auth failed" in lowered:
+            return "No se pudo autenticar en el servidor SFTP. Verificá el usuario y la contraseña."
+        if "no such host" in lowered or "name or service not known" in lowered or "could not resolve" in lowered:
+            return "No se pudo resolver el host del servidor SFTP. Revisá la dirección ingresada."
+        if "connection refused" in lowered or "connection timed out" in lowered or "network is unreachable" in lowered:
+            return "No fue posible conectarse al servidor SFTP. Asegurate de que esté en línea y accesible."
+        return text
 
     def login_required(func):
         @wraps(func)
@@ -200,6 +251,104 @@ def create_app() -> Flask:
             return jsonify({"status": "under_construction"})
         return {"error": "unsupported remote type"}, 400
 
+    @app.post("/rclone/remotes/sftp/browse")
+    @login_required
+    def browse_sftp_directories() -> tuple[dict, int]:
+        """Connect to an SFTP server and list directories for selection."""
+
+        data = request.get_json(force=True) or {}
+        host = (data.get("host") or "").strip()
+        username = (data.get("username") or data.get("user") or "").strip()
+        password = (data.get("password") or "").strip()
+        port = (data.get("port") or "").strip()
+        path = data.get("path")
+
+        if not host:
+            return {"error": "El host del servidor SFTP es obligatorio."}, 400
+        if not username:
+            return {"error": "Indicá el usuario del servidor SFTP."}, 400
+        if not password:
+            return {"error": "Ingresá la contraseña para conectarte por SFTP."}, 400
+        if port and not port.isdigit():
+            return {"error": "El puerto SFTP debe ser un número válido."}, 400
+
+        normalized_path = _normalize_sftp_base_path(path)
+        temp_path: str | None = None
+        try:
+            tmp = tempfile.NamedTemporaryFile(delete=False)
+            temp_path = tmp.name
+            tmp.close()
+            args = [
+                "--config",
+                temp_path,
+                "config",
+                "create",
+                "--non-interactive",
+                "__probe__",
+                "sftp",
+                "host",
+                host,
+                "user",
+                username,
+            ]
+            if port:
+                args.extend(["port", port])
+            args.extend(["pass", password])
+            run_rclone(args, capture_output=True, text=True, check=True)
+            target = "__probe__:"
+            if normalized_path != "/":
+                target = f"__probe__:{normalized_path.lstrip('/')}"
+            result = run_rclone(
+                [
+                    "--config",
+                    temp_path,
+                    "lsjson",
+                    target,
+                    "--dirs-only",
+                ],
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+        except RuntimeError:
+            return {"error": "rclone is not installed"}, 500
+        except subprocess.CalledProcessError as exc:
+            message = (exc.stderr or exc.stdout or "").strip()
+            return {"error": _translate_sftp_error(message)}, 400
+        finally:
+            if temp_path and os.path.exists(temp_path):
+                try:
+                    os.unlink(temp_path)
+                except OSError:
+                    pass
+
+        try:
+            items = json.loads(result.stdout or "[]")
+        except json.JSONDecodeError:
+            return {"error": "No se pudieron interpretar las carpetas devueltas por el servidor SFTP."}, 502
+
+        directories: list[dict[str, str]] = []
+        for entry in items:
+            name = (entry.get("Name") or "").strip()
+            if not name:
+                continue
+            try:
+                directories.append(
+                    {"name": name, "path": _join_sftp_folder(normalized_path, name)}
+                )
+            except ValueError:
+                continue
+        directories.sort(key=lambda item: item["path"].lower())
+
+        return (
+            {
+                "current_path": normalized_path,
+                "parent_path": _parent_sftp_path(normalized_path),
+                "directories": directories,
+            },
+            200,
+        )
+
     @app.post("/rclone/remotes/drive/validate")
     @login_required
     def validate_drive_token() -> tuple[dict, int]:
@@ -274,6 +423,7 @@ def create_app() -> Flask:
         pre_config_commands: list[list[str]] = []
         post_config_commands: list[list[str]] = []
         cleanup_remote_on_error = False
+        error_translator = None
         if remote_type == "onedrive":
             return {"error": "OneDrive aún está en construcción"}, 400
         if remote_type == "drive":
@@ -350,6 +500,7 @@ def create_app() -> Flask:
             username = (settings.get("username") or settings.get("user") or "").strip()
             password = (settings.get("password") or "").strip()
             port = (settings.get("port") or "").strip()
+            base_path = (settings.get("base_path") or "").strip()
             if not host:
                 return {"error": "host is required"}, 400
             if not username:
@@ -358,6 +509,15 @@ def create_app() -> Flask:
                 return {"error": "password is required"}, 400
             if port and not port.isdigit():
                 return {"error": "invalid port"}, 400
+            if not base_path:
+                return {
+                    "error": "Seleccioná la carpeta del servidor SFTP donde se crearán los respaldos.",
+                }, 400
+            normalized_base = _normalize_sftp_base_path(base_path)
+            try:
+                target_path = _join_sftp_folder(normalized_base, name)
+            except ValueError:
+                return {"error": "El nombre del remote no es válido para crear una carpeta en SFTP."}, 400
             args = [
                 *base_args,
                 "sftp",
@@ -368,12 +528,13 @@ def create_app() -> Flask:
             ]
             if port:
                 args.extend(["port", port])
-            args.extend(["pass", password])
+            args.extend(["path", target_path, "pass", password])
             post_config_commands = [
+                ["mkdir", f"{name}:"],
                 ["lsd", f"{name}:"],
-                ["mkdir", f"{name}:{name}"],
             ]
             cleanup_remote_on_error = True
+            error_translator = _translate_sftp_error
         else:
             return {"error": "unsupported remote type"}, 400
         try:
@@ -395,11 +556,15 @@ def create_app() -> Flask:
                     except Exception:
                         pass
                     error = (exc.stderr or exc.stdout or "").strip() or "failed to create remote"
+                    if error_translator:
+                        error = error_translator(error)
                     return {"error": error}, 400
         except RuntimeError:
             return {"error": "rclone is not installed"}, 500
         except subprocess.CalledProcessError as exc:
             error = (exc.stderr or exc.stdout or "").strip() or "failed to create remote"
+            if error_translator:
+                error = error_translator(error)
             return {"error": error}, 400
         return {"status": "ok"}, 201
 

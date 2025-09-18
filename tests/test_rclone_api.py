@@ -284,6 +284,167 @@ def test_create_rclone_remote_local_success(monkeypatch, app):
     assert cmd[9] == "/backups"
 
 
+def test_browse_sftp_directories_success(monkeypatch, app):
+    calls: list[list[str]] = []
+
+    class DummyResult:
+        def __init__(self, stdout: str = ""):
+            self.stdout = stdout
+            self.stderr = ""
+
+    def fake_run(cmd, capture_output, text, check):
+        calls.append(cmd)
+        if "lsjson" in cmd:
+            return DummyResult('[{"Name": "backups"}, {"Name": "logs"}]')
+        return DummyResult()
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    client = app.test_client()
+    client.post("/login", data={"username": "admin", "password": "secret"})
+    resp = client.post(
+        "/rclone/remotes/sftp/browse",
+        json={"host": "example.com", "username": "user", "password": "pass"},
+    )
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data["current_path"] == "/"
+    assert data["parent_path"] == "/"
+    assert data["directories"] == [
+        {"name": "backups", "path": "/backups"},
+        {"name": "logs", "path": "/logs"},
+    ]
+    assert len(calls) == 2
+    config_cmd, lsjson_cmd = calls
+    assert config_cmd[0] == "rclone"
+    assert config_cmd[3:7] == ["config", "create", "--non-interactive", "__probe__"]
+    assert "sftp" in config_cmd
+    assert config_cmd[config_cmd.index("host") + 1] == "example.com"
+    assert config_cmd[config_cmd.index("user") + 1] == "user"
+    assert config_cmd[config_cmd.index("pass") + 1] == "pass"
+    assert lsjson_cmd[0] == "rclone"
+    assert lsjson_cmd[3] == "lsjson"
+    assert lsjson_cmd[4] == "__probe__:"
+    assert "--dirs-only" in lsjson_cmd
+
+
+def test_browse_sftp_directories_permission_error(monkeypatch, app):
+    class DummyResult:
+        stdout = ""
+        stderr = ""
+
+    def fake_run(cmd, capture_output, text, check):
+        if "lsjson" in cmd:
+            raise subprocess.CalledProcessError(1, cmd, stderr="permission denied")
+        return DummyResult()
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    client = app.test_client()
+    client.post("/login", data={"username": "admin", "password": "secret"})
+    resp = client.post(
+        "/rclone/remotes/sftp/browse",
+        json={"host": "example.com", "username": "user", "password": "pass"},
+    )
+    assert resp.status_code == 400
+    assert resp.get_json() == {
+        "error": "El usuario SFTP no tiene permisos suficientes en esa carpeta. Probá con otra ubicación o ajustá los permisos en el servidor.",
+    }
+
+
+def test_create_sftp_remote_requires_base_path(app):
+    client = app.test_client()
+    client.post("/login", data={"username": "admin", "password": "secret"})
+    resp = client.post(
+        "/rclone/remotes",
+        json={
+            "name": "sftpbackup",
+            "type": "sftp",
+            "settings": {"host": "example.com", "username": "user", "password": "pass"},
+        },
+    )
+    assert resp.status_code == 400
+    assert resp.get_json() == {
+        "error": "Seleccioná la carpeta del servidor SFTP donde se crearán los respaldos.",
+    }
+
+
+def test_create_sftp_remote_success(monkeypatch, app):
+    calls: list[list[str]] = []
+
+    class DummyResult:
+        stdout = ""
+        stderr = ""
+
+    def fake_run(cmd, capture_output, text, check):
+        calls.append(cmd)
+        return DummyResult()
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    client = app.test_client()
+    client.post("/login", data={"username": "admin", "password": "secret"})
+    resp = client.post(
+        "/rclone/remotes",
+        json={
+            "name": "sftpbackup",
+            "type": "sftp",
+            "settings": {
+                "host": "example.com",
+                "username": "user",
+                "password": "pass",
+                "base_path": "/data",
+            },
+        },
+    )
+    assert resp.status_code == 201
+    assert resp.get_json() == {"status": "ok"}
+    assert len(calls) == 3
+    config_cmd, mkdir_cmd, lsd_cmd = calls
+    assert config_cmd[3:7] == ["config", "create", "--non-interactive", "sftpbackup"]
+    path_index = config_cmd.index("path")
+    assert config_cmd[path_index + 1] == "/data/sftpbackup"
+    assert mkdir_cmd[3:] == ["mkdir", "sftpbackup:"]
+    assert lsd_cmd[3:] == ["lsd", "sftpbackup:"]
+
+
+def test_create_sftp_remote_permission_error(monkeypatch, app):
+    calls: list[list[str]] = []
+
+    class DummyResult:
+        stdout = ""
+        stderr = ""
+
+    def fake_run(cmd, capture_output, text, check):
+        calls.append(cmd)
+        if "mkdir" in cmd:
+            raise subprocess.CalledProcessError(1, cmd, stderr="permission denied")
+        return DummyResult()
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    client = app.test_client()
+    client.post("/login", data={"username": "admin", "password": "secret"})
+    resp = client.post(
+        "/rclone/remotes",
+        json={
+            "name": "sftpbackup",
+            "type": "sftp",
+            "settings": {
+                "host": "example.com",
+                "username": "user",
+                "password": "pass",
+                "base_path": "/data",
+            },
+        },
+    )
+    assert resp.status_code == 400
+    assert resp.get_json() == {
+        "error": "El usuario SFTP no tiene permisos suficientes en esa carpeta. Probá con otra ubicación o ajustá los permisos en el servidor.",
+    }
+    assert len(calls) == 3
+    config_path = os.getenv("RCLONE_CONFIG")
+    delete_cmd = calls[-1]
+    assert delete_cmd[:4] == ["rclone", "--config", config_path, "config"]
+    assert delete_cmd[4:6] == ["delete", "sftpbackup"]
+
+
 def test_create_rclone_remote_nested_config_path(monkeypatch, app, tmp_path):
     calls: list[list[str]] = []
     nested_config = tmp_path / "deep" / "nested" / "rclone.conf"
