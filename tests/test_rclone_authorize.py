@@ -1,176 +1,242 @@
 import os
-import queue
 import sys
+import importlib
+import subprocess
 from types import SimpleNamespace
 
 import pytest
 
 sys.path.append(os.path.dirname(os.path.dirname(__file__)))
-os.environ["DATABASE_URL"] = "sqlite:///:memory:"
-os.environ["APP_ADMIN_USER"] = "admin"
-os.environ["APP_ADMIN_PASS"] = "secret"
-os.environ["APP_SECRET_KEY"] = "test-key"
-
-from orchestrator.app import create_app
-from orchestrator.services import rclone as rclone_service
 
 
-class FakeStdout:
-    def __init__(self, proc: "FakeProcess") -> None:
-        self.proc = proc
-
-    def readline(self) -> str:
-        try:
-            return self.proc.stdout_queue.get(timeout=0.05)
-        except queue.Empty:
-            return ""
-
-    def close(self) -> None:  # pragma: no cover - nothing to clean
-        pass
-
-
-class FakeStdin:
-    def __init__(self, proc: "FakeProcess") -> None:
-        self.proc = proc
-        self.writes: list[str] = []
-
-    def write(self, data: str) -> int:
-        self.writes.append(data)
-        if data.endswith("\n") and not self.proc.json_sent:
-            self.proc.stdout_queue.put(self.proc.token_json + "\n")
-            self.proc.json_sent = True
-            self.proc.returncode = 0
-        return len(data)
-
-    def flush(self) -> None:  # pragma: no cover - nothing to flush
-        pass
-
-    def close(self) -> None:  # pragma: no cover - nothing to clean
-        pass
-
-
-class FakeProcess:
-    def __init__(self, url: str, token_json: str) -> None:
-        self.url = url
-        self.token_json = token_json
-        self.stdout_queue: "queue.Queue[str]" = queue.Queue()
-        self.stdout_queue.put(f"Visit {url}\n")
-        self.stdout = FakeStdout(self)
-        self.stdin = FakeStdin(self)
-        self.returncode: int | None = None
-        self.json_sent = False
-        self.command: list[str] | None = None
-
-    def poll(self) -> int | None:
-        return self.returncode
-
-    def wait(self, timeout: float | None = None) -> int:
-        if self.returncode is None:
-            self.returncode = 0
-        return self.returncode
-
-    def terminate(self) -> None:  # pragma: no cover - not triggered in tests
-        self.returncode = -15
-
-    def kill(self) -> None:  # pragma: no cover - not triggered in tests
-        self.returncode = -9
-
-
-@pytest.fixture(autouse=True)
-def clear_sessions() -> None:
-    rclone_service._AUTH_SESSIONS.clear()
-    yield
-    rclone_service._AUTH_SESSIONS.clear()
+def make_app(monkeypatch, **extra_env):
+    base_env = {
+        "DATABASE_URL": "sqlite://",
+        "APP_ADMIN_USER": "admin",
+        "APP_ADMIN_PASS": "secret",
+        "APP_SECRET_KEY": "test-key",
+        "RCLONE_CONFIG": "/tmp/test-rclone.conf",
+    }
+    for key, value in base_env.items():
+        monkeypatch.setenv(key, value)
+    for key, value in extra_env.items():
+        monkeypatch.setenv(key, value)
+    app_module = importlib.import_module("orchestrator.app")
+    db_module = importlib.import_module("orchestrator.app.database")
+    models_module = importlib.import_module("orchestrator.app.models")
+    importlib.reload(db_module)
+    importlib.reload(models_module)
+    importlib.reload(app_module)
+    monkeypatch.setattr(app_module, "start_scheduler", lambda: None)
+    monkeypatch.setattr(app_module, "schedule_app_backups", lambda: None)
+    app = app_module.create_app()
+    app.config.update(TESTING=True)
+    return app, app_module
 
 
 def login(client) -> None:
     client.post("/login", data={"username": "admin", "password": "secret"})
 
 
-def test_authorize_returns_url_and_session(monkeypatch):
-    monkeypatch.setattr("orchestrator.app.start_scheduler", lambda: None)
-    fake_proc = FakeProcess("http://auth", "{\"token\": \"value\"}")
-
-    def fake_popen(cmd, **kwargs):
-        fake_proc.command = cmd
-        return fake_proc
-
-    monkeypatch.setattr(rclone_service.subprocess, "Popen", fake_popen)
-    monkeypatch.setattr(
-        rclone_service.uuid,
-        "uuid4",
-        lambda: SimpleNamespace(hex="session123"),
+def test_remote_options_local(monkeypatch):
+    app, _ = make_app(
+        monkeypatch,
+        RCLONE_LOCAL_DIRECTORIES="Local A|/data/a;/data/b",
     )
-    app = create_app()
     client = app.test_client()
     login(client)
-    resp = client.get("/rclone/remotes/foo/authorize")
+    resp = client.get("/rclone/remotes/options/local")
     assert resp.status_code == 200
-    assert resp.get_json() == {"url": "http://auth", "session_id": "session123"}
-    assert fake_proc.command == [
-        "rclone",
-        "authorize",
-        "drive",
-        "--auth-no-open-browser",
-        "--manual",
-    ]
-    session = rclone_service.get_authorization_session("session123")
-    assert session is not None
-    assert session.process is fake_proc
+    assert resp.get_json() == {
+        "directories": [
+            {"label": "Local A", "path": "/data/a"},
+            {"label": "/data/b", "path": "/data/b"},
+        ]
+    }
 
 
-def test_authorize_flow_updates_remote(monkeypatch):
-    monkeypatch.setattr("orchestrator.app.start_scheduler", lambda: None)
-    fake_proc = FakeProcess("http://auth", "{\"access_token\": \"abc\"}")
+def test_remote_options_sftp(monkeypatch):
+    app, _ = make_app(
+        monkeypatch,
+        RCLONE_SFTP_DIRECTORIES="Backups|/srv/backups",
+        RCLONE_SFTP_HOST="sftp.internal",
+        RCLONE_SFTP_PORT="2222",
+    )
+    client = app.test_client()
+    login(client)
+    resp = client.get("/rclone/remotes/options/sftp")
+    assert resp.status_code == 200
+    assert resp.get_json() == {
+        "directories": [{"label": "Backups", "path": "/srv/backups"}],
+        "host": "sftp.internal",
+        "port": "2222",
+    }
 
-    def fake_popen(cmd, **kwargs):
-        fake_proc.command = cmd
-        return fake_proc
 
-    monkeypatch.setattr(rclone_service.subprocess, "Popen", fake_popen)
-    monkeypatch.setattr(
-        rclone_service.uuid,
-        "uuid4",
-        lambda: SimpleNamespace(hex="session456"),
+def test_drive_validate_success(monkeypatch):
+    app, app_module = make_app(monkeypatch)
+    recorded: dict[str, object] = {}
+
+    def fake_run(cmd, **kwargs):
+        recorded["cmd"] = cmd
+        recorded["kwargs"] = kwargs
+        return SimpleNamespace(stdout="", stderr="")
+
+    monkeypatch.setattr(app_module.subprocess, "run", fake_run)
+    client = app.test_client()
+    login(client)
+    resp = client.post(
+        "/rclone/remotes/drive/validate", json={"token": "token-json"}
+    )
+    assert resp.status_code == 200
+    assert resp.get_json() == {"status": "ok"}
+    cmd = recorded["cmd"]
+    assert cmd[0] == "rclone"
+    assert "--config" in cmd
+    config_index = cmd.index("--config")
+    assert cmd[config_index + 1]
+    assert "config" in cmd
+    assert "create" in cmd
+    assert "__validate__" in cmd
+    token_index = cmd.index("token")
+    assert cmd[token_index + 1] == "token-json"
+    assert "--no-auto-auth" in cmd
+    assert "--non-interactive" in cmd
+    kwargs = recorded["kwargs"]
+    assert kwargs["capture_output"] is True
+    assert kwargs["text"] is True
+    assert kwargs["check"] is True
+
+
+def test_drive_validate_failure(monkeypatch):
+    app, app_module = make_app(monkeypatch)
+
+    def fake_run(cmd, **kwargs):
+        raise subprocess.CalledProcessError(1, cmd, stderr="bad token")
+
+    monkeypatch.setattr(app_module.subprocess, "run", fake_run)
+    client = app.test_client()
+    login(client)
+    resp = client.post("/rclone/remotes/drive/validate", json={"token": "tok"})
+    assert resp.status_code == 400
+    assert resp.get_json() == {"error": "bad token"}
+
+
+def test_drive_validate_requires_token(monkeypatch):
+    app, _ = make_app(monkeypatch)
+    client = app.test_client()
+    login(client)
+    resp = client.post("/rclone/remotes/drive/validate", json={})
+    assert resp.status_code == 400
+    assert resp.get_json() == {"error": "token is required"}
+
+
+def test_create_local_remote(monkeypatch):
+    app, app_module = make_app(
+        monkeypatch,
+        RCLONE_LOCAL_DIRECTORIES="Backups|/data/backups",
     )
     recorded: dict[str, object] = {}
 
     def fake_run(cmd, **kwargs):
         recorded["cmd"] = cmd
         recorded["kwargs"] = kwargs
-        class Result:
-            returncode = 0
-            stdout = ""
-            stderr = ""
+        return SimpleNamespace(stdout="", stderr="")
 
-        return Result()
-
-    monkeypatch.setattr("orchestrator.app.subprocess.run", fake_run)
-    app = create_app()
+    monkeypatch.setattr(app_module.subprocess, "run", fake_run)
     client = app.test_client()
     login(client)
-
-    resp = client.get("/rclone/remotes/foo/authorize")
-    session_id = resp.get_json()["session_id"]
-
-    resp = client.post(
-        "/rclone/remotes/foo/authorize",
-        json={"session_id": session_id, "code": "the-code"},
-    )
-    assert resp.status_code == 200
+    payload = {
+        "name": "local1",
+        "type": "local",
+        "settings": {"path": "/data/backups"},
+    }
+    resp = client.post("/rclone/remotes", json=payload)
+    assert resp.status_code == 201
     assert resp.get_json() == {"status": "ok"}
-    assert fake_proc.stdin.writes[-1] == "the-code\n"
-    assert recorded["cmd"] == [
-        "rclone",
-        "--config",
-        "/config/rclone/rclone.conf",
-        "config",
-        "update",
-        "foo",
-        "token",
-        "{\"access_token\": \"abc\"}",
-    ]
-    assert recorded["kwargs"]["check"] is True
-    assert recorded["kwargs"]["capture_output"] is True
-    assert recorded["kwargs"]["text"] is True
-    assert rclone_service.get_authorization_session(session_id) is None
+    cmd = recorded["cmd"]
+    assert cmd[:3] == ["rclone", "--config", "/tmp/test-rclone.conf"]
+    assert "--non-interactive" in cmd
+    assert "alias" in cmd
+    alias_index = cmd.index("alias")
+    assert cmd[alias_index + 1] == "remote"
+    assert cmd[alias_index + 2] == "/data/backups"
+
+
+def test_create_local_remote_invalid_path(monkeypatch):
+    app, app_module = make_app(
+        monkeypatch,
+        RCLONE_LOCAL_DIRECTORIES="Backups|/data/backups",
+    )
+    called = False
+
+    def fake_run(cmd, **kwargs):
+        nonlocal called
+        called = True
+        return SimpleNamespace(stdout="", stderr="")
+
+    monkeypatch.setattr(app_module.subprocess, "run", fake_run)
+    client = app.test_client()
+    login(client)
+    payload = {
+        "name": "local2",
+        "type": "local",
+        "settings": {"path": "/other"},
+    }
+    resp = client.post("/rclone/remotes", json=payload)
+    assert resp.status_code == 400
+    assert resp.get_json() == {"error": "invalid path"}
+    assert called is False
+
+
+def test_create_sftp_remote_success(monkeypatch):
+    app, app_module = make_app(
+        monkeypatch,
+        RCLONE_SFTP_DIRECTORIES="Backups|/srv/backups",
+        RCLONE_SFTP_HOST="sftp.internal",
+        RCLONE_SFTP_USER="backup",
+        RCLONE_SFTP_PASSWORD="secret",
+    )
+    recorded: dict[str, object] = {}
+
+    def fake_run(cmd, **kwargs):
+        recorded["cmd"] = cmd
+        recorded["kwargs"] = kwargs
+        return SimpleNamespace(stdout="", stderr="")
+
+    monkeypatch.setattr(app_module.subprocess, "run", fake_run)
+    client = app.test_client()
+    login(client)
+    payload = {
+        "name": "sftp1",
+        "type": "sftp",
+        "settings": {"path": "/srv/backups"},
+    }
+    resp = client.post("/rclone/remotes", json=payload)
+    assert resp.status_code == 201
+    assert resp.get_json() == {"status": "ok"}
+    cmd = recorded["cmd"]
+    assert "sftp" in cmd
+    assert "host" in cmd and cmd[cmd.index("host") + 1] == "sftp.internal"
+    assert "user" in cmd and cmd[cmd.index("user") + 1] == "backup"
+    assert "pass" in cmd and cmd[cmd.index("pass") + 1] == "secret"
+    assert "path" in cmd and cmd[cmd.index("path") + 1] == "/srv/backups"
+
+
+def test_create_sftp_remote_missing_credentials(monkeypatch):
+    app, _ = make_app(
+        monkeypatch,
+        RCLONE_SFTP_DIRECTORIES="Backups|/srv/backups",
+        RCLONE_SFTP_HOST="sftp.internal",
+        RCLONE_SFTP_USER="backup",
+    )
+    client = app.test_client()
+    login(client)
+    payload = {
+        "name": "sftp2",
+        "type": "sftp",
+        "settings": {"path": "/srv/backups"},
+    }
+    resp = client.post("/rclone/remotes", json=payload)
+    assert resp.status_code == 500
+    assert resp.get_json() == {"error": "sftp credentials are not configured"}
