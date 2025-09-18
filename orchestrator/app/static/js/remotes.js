@@ -34,12 +34,20 @@ async function loadRemotes() {
     }
     const remotes = await resp.json();
     const tbody = document.querySelector('#remotes-table tbody');
+    const emptyMessage = document.getElementById('remotes-empty');
     if (tbody) {
       tbody.innerHTML = '';
     }
     const select = document.getElementById('rclone_remote');
     if (select) {
       select.innerHTML = '<option value=""></option>';
+    }
+    if (emptyMessage) {
+      if (!remotes.length) {
+        emptyMessage.classList.remove('d-none');
+      } else {
+        emptyMessage.classList.add('d-none');
+      }
     }
     remotes.forEach((name) => {
       if (tbody) {
