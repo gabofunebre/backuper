@@ -64,18 +64,63 @@
 
       <div class="remote-panel d-none" data-remote-panel="drive">
         <h2 class="h5">Google Drive</h2>
-        <p>Segu&iacute; estos pasos para obtener el token manual:</p>
-        <ol>
-          <li>Abrí el asistente de rclone para Google Drive desde <a id="drive-doc-link" href="https://rclone.org/drive/" target="_blank" rel="noopener">la documentación oficial</a>.</li>
-          <li>Generá un token OAuth siguiendo las instrucciones de rclone.</li>
-          <li>Pegá el JSON del token en el campo siguiente y probá la conexión.</li>
-        </ol>
-        <div class="mb-3">
-          <label for="drive_token" class="form-label">Token de acceso</label>
-          <textarea id="drive_token" class="form-control" rows="4" placeholder='{"access_token": "..."}'></textarea>
+        <p class="text-muted">Elegí cómo querés conectar Google Drive para este remote.</p>
+        <div class="form-check">
+          <input class="form-check-input" type="radio" name="drive_mode" id="drive_mode_shared" value="shared" checked>
+          <label class="form-check-label" for="drive_mode_shared">
+            Usar la cuenta provista por el orquestador
+          </label>
+          <div class="form-text">
+            Vamos a crear una carpeta en la cuenta genérica y la compartiremos con tu correo.
+          </div>
         </div>
-        <button type="button" class="btn btn-outline-secondary" id="drive-test-token">Probar token</button>
-        <div id="drive-token-feedback" class="form-text mt-2"></div>
+        <div id="drive_shared_settings" class="border rounded p-3 mt-3">
+          <div class="mb-3">
+            <label for="drive_email" class="form-label">Correo de Google</label>
+            <input type="email" class="form-control" id="drive_email" placeholder="usuario@ejemplo.com" autocomplete="email">
+          </div>
+          <div class="form-text">
+            Se creará una carpeta llamada <code>&lt;nombre del remote&gt;</code> y se compartirá con este correo.
+          </div>
+        </div>
+        <div class="form-check mt-4">
+          <input class="form-check-input" type="radio" name="drive_mode" id="drive_mode_custom" value="custom">
+          <label class="form-check-label" for="drive_mode_custom">
+            Usar mi propia cuenta de Google Drive
+          </label>
+          <div class="form-text">
+            Vas a necesitar generar un token OAuth con tus credenciales.
+          </div>
+        </div>
+        <div id="drive_custom_settings" class="border rounded p-3 mt-3 d-none">
+          <p>Segu&iacute; estos pasos para obtener el token manual:</p>
+          <ol>
+            <li>Abrí el asistente de rclone para Google Drive desde <a id="drive-doc-link" href="https://rclone.org/drive/" target="_blank" rel="noopener">la documentación oficial</a>.</li>
+            <li>Generá un token OAuth siguiendo las instrucciones de rclone.</li>
+            <li>Pegá el JSON del token en el campo siguiente y probá la conexión.</li>
+          </ol>
+          <div class="mb-3">
+            <label for="drive_token" class="form-label">Token de acceso</label>
+            <textarea id="drive_token" class="form-control" rows="4" placeholder='{"access_token": "..."}'></textarea>
+          </div>
+          <div class="row g-3">
+            <div class="col-md-6">
+              <label for="drive_client_id" class="form-label">Client ID (opcional)</label>
+              <input type="text" class="form-control" id="drive_client_id" autocomplete="off" placeholder="123.apps.googleusercontent.com">
+              <div class="form-text">Si lo dejás vacío se usará el client ID configurado en el orquestador.</div>
+            </div>
+            <div class="col-md-6">
+              <label for="drive_client_secret" class="form-label">Client secret (opcional)</label>
+              <input type="text" class="form-control" id="drive_client_secret" autocomplete="off" placeholder="clave-secreta">
+            </div>
+          </div>
+          <div class="mb-3 mt-3">
+            <label for="drive_account_email" class="form-label">Correo de la cuenta (opcional)</label>
+            <input type="email" class="form-control" id="drive_account_email" placeholder="miusuario@ejemplo.com" autocomplete="email">
+          </div>
+          <button type="button" class="btn btn-outline-secondary" id="drive-test-token">Probar token</button>
+          <div id="drive-token-feedback" class="form-text mt-2"></div>
+        </div>
       </div>
 
       <div class="remote-panel d-none" data-remote-panel="onedrive">

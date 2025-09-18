@@ -1,6 +1,30 @@
 const directoryCache = {};
 let driveValidation = { status: 'idle', token: '' };
 
+function getDriveMode() {
+  const selected = document.querySelector('input[name="drive_mode"]:checked');
+  return selected ? selected.value : 'shared';
+}
+
+function updateDriveModeUI() {
+  const mode = getDriveMode();
+  const shared = document.getElementById('drive_shared_settings');
+  const custom = document.getElementById('drive_custom_settings');
+  if (shared) {
+    shared.classList.toggle('d-none', mode !== 'shared');
+  }
+  if (custom) {
+    custom.classList.toggle('d-none', mode !== 'custom');
+  }
+  if (mode === 'custom') {
+    driveValidation = { status: 'idle', token: '' };
+    updateDriveFeedback('Recordá probar el token antes de guardar.', 'warning');
+  } else {
+    driveValidation = { status: 'idle', token: '' };
+    updateDriveFeedback('', 'muted');
+  }
+}
+
 async function loadRemotes() {
   try {
     const resp = await fetch('/rclone/remotes');
@@ -149,8 +173,7 @@ async function showPanelForType(type) {
       showFeedback(err.message, 'danger');
     }
   } else if (type === 'drive') {
-    driveValidation = { status: 'idle', token: '' };
-    updateDriveFeedback('Recordá probar el token antes de guardar.', 'warning');
+    updateDriveModeUI();
   } else if (type === 'onedrive') {
     showFeedback('La integración con OneDrive está en construcción.', 'info');
   }
@@ -163,6 +186,11 @@ function initDriveValidation() {
     return;
   }
   tokenInput.addEventListener('input', () => {
+    if (getDriveMode() !== 'custom') {
+      driveValidation = { status: 'idle', token: '' };
+      updateDriveFeedback('', 'muted');
+      return;
+    }
     if (driveValidation.status === 'success' && driveValidation.token !== tokenInput.value.trim()) {
       updateDriveFeedback('El token cambió, probalo nuevamente antes de guardar.', 'warning');
       driveValidation = { status: 'dirty', token: '' };
@@ -171,7 +199,26 @@ function initDriveValidation() {
       driveValidation = { status: 'idle', token: '' };
     }
   });
+  ['drive_client_id', 'drive_client_secret'].forEach((id) => {
+    const field = document.getElementById(id);
+    if (!field) {
+      return;
+    }
+    field.addEventListener('input', () => {
+      if (getDriveMode() !== 'custom') {
+        return;
+      }
+      if (driveValidation.status === 'success') {
+        updateDriveFeedback('Las credenciales cambiaron, probá el token nuevamente.', 'warning');
+        driveValidation = { status: 'dirty', token: '' };
+      }
+    });
+  });
   testButton.addEventListener('click', async () => {
+    if (getDriveMode() !== 'custom') {
+      updateDriveFeedback('Seleccioná "Usar mi propia cuenta" para probar el token.', 'warning');
+      return;
+    }
     const token = tokenInput.value.trim();
     if (!token) {
       updateDriveFeedback('Pegá el token de Google Drive antes de probarlo.', 'danger');
@@ -180,10 +227,19 @@ function initDriveValidation() {
     testButton.disabled = true;
     updateDriveFeedback('Probando token…', 'warning');
     try {
+      const clientId = document.getElementById('drive_client_id')?.value.trim() || '';
+      const clientSecret = document.getElementById('drive_client_secret')?.value.trim() || '';
+      const payload = { token };
+      if (clientId) {
+        payload.client_id = clientId;
+      }
+      if (clientSecret) {
+        payload.client_secret = clientSecret;
+      }
       const resp = await fetch('/rclone/remotes/drive/validate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ token })
+        body: JSON.stringify(payload)
       });
       if (resp.status === 401) {
         window.location.href = '/login';
@@ -221,6 +277,15 @@ function initRemoteForm() {
       showPanelForType(selected);
     });
   }
+  document.querySelectorAll('input[name="drive_mode"]').forEach((input) => {
+    input.addEventListener('change', (event) => {
+      const mode = event.target.value;
+      updateDriveModeUI();
+      if (mode !== 'custom') {
+        updateDriveFeedback('', 'muted');
+      }
+    });
+  });
   initDriveValidation();
   form.addEventListener('submit', async (event) => {
     event.preventDefault();
@@ -274,18 +339,47 @@ function initRemoteForm() {
         payload.settings.port = portValue;
       }
     } else if (type === 'drive') {
-      const token = document.getElementById('drive_token')?.value.trim() || '';
-      if (!token) {
-        showFeedback('Pegá el token de Google Drive antes de guardar.', 'danger');
-        return;
-      }
-      if (driveValidation.status === 'success' && driveValidation.token !== token) {
-        driveValidation = { status: 'dirty', token: '' };
-      }
-      payload.settings.token = token;
-      if (driveValidation.status !== 'success') {
-        showFeedback('Probá el token de Google Drive antes de guardarlo.', 'warning');
-        return;
+      const mode = getDriveMode();
+      payload.settings.mode = mode;
+      if (mode === 'shared') {
+        const emailInput = document.getElementById('drive_email');
+        const email = emailInput ? emailInput.value.trim() : '';
+        const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+        if (!email) {
+          showFeedback('Ingresá el correo de Google con el que querés compartir la carpeta.', 'danger');
+          return;
+        }
+        if (!emailRegex.test(email)) {
+          showFeedback('El correo ingresado no tiene un formato válido.', 'danger');
+          return;
+        }
+        payload.settings.email = email;
+      } else {
+        const token = document.getElementById('drive_token')?.value.trim() || '';
+        if (!token) {
+          showFeedback('Pegá el token de Google Drive antes de guardar.', 'danger');
+          return;
+        }
+        if (driveValidation.status === 'success' && driveValidation.token !== token) {
+          driveValidation = { status: 'dirty', token: '' };
+        }
+        payload.settings.token = token;
+        const clientId = document.getElementById('drive_client_id')?.value.trim() || '';
+        const clientSecret = document.getElementById('drive_client_secret')?.value.trim() || '';
+        const accountEmail = document.getElementById('drive_account_email')?.value.trim() || '';
+        if (clientId) {
+          payload.settings.client_id = clientId;
+        }
+        if (clientSecret) {
+          payload.settings.client_secret = clientSecret;
+        }
+        if (accountEmail) {
+          payload.settings.account_email = accountEmail;
+        }
+        if (driveValidation.status !== 'success') {
+          showFeedback('Probá el token de Google Drive antes de guardarlo.', 'warning');
+          return;
+        }
       }
     } else if (type === 'onedrive') {
       showFeedback('OneDrive todavía no está disponible.', 'warning');
