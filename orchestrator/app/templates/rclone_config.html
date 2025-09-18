@@ -2,41 +2,80 @@
 
 {% block content %}
 <div class="container py-4">
-  <h1 class="mb-4">Configurar Rclone</h1>
-  <form id="remote-form">
-    <div class="mb-3">
-      <label for="remote_name" class="form-label">Nombre</label>
-      <input type="text" class="form-control" id="remote_name" required>
+  <h1 class="mb-4">Configurar remote de Rclone</h1>
+  <form id="remote-form" class="mt-3" novalidate>
+    <div class="row g-3">
+      <div class="col-md-6">
+        <label for="remote_name" class="form-label">Nombre</label>
+        <input type="text" class="form-control" id="remote_name" required placeholder="Ej: gdrive_respaldos">
+      </div>
+      <div class="col-md-6">
+        <label for="remote_type" class="form-label">Tipo</label>
+        <select class="form-select" id="remote_type" required>
+          <option value="">Seleccione…</option>
+          <option value="drive">Google Drive</option>
+          <option value="onedrive">OneDrive</option>
+          <option value="sftp">SFTP</option>
+          <option value="local">Local</option>
+        </select>
+      </div>
     </div>
-    <div class="mb-3">
-      <label for="remote_type" class="form-label">Tipo</label>
-      <select class="form-select" id="remote_type" required>
-        <option value="">Seleccione...</option>
-        <option value="drive">drive (Google Drive)</option>
-        <option value="onedrive">onedrive</option>
-        <option value="sftp">sftp</option>
-        <option value="local">local</option>
-      </select>
+
+    <div id="remote-feedback" class="alert mt-4 d-none" role="alert"></div>
+
+    <div class="mt-4" id="remote-type-panels">
+      <div class="remote-panel d-none" data-remote-panel="local">
+        <h2 class="h5">Destino local</h2>
+        <p class="text-muted">Seleccioná una carpeta preconfigurada del servidor donde se guardarán los respaldos.</p>
+        <div class="mb-3">
+          <label for="local_path" class="form-label">Carpeta disponible</label>
+          <select class="form-select" id="local_path"></select>
+        </div>
+        <div id="local-empty" class="alert alert-warning d-none" role="alert">
+          No hay carpetas locales configuradas. Agregalas en la configuración del contenedor.
+        </div>
+      </div>
+
+      <div class="remote-panel d-none" data-remote-panel="sftp">
+        <h2 class="h5">Servidor SFTP</h2>
+        <p class="text-muted">Elegí la carpeta remota a la que el orquestador tiene acceso mediante SFTP.</p>
+        <div class="mb-3">
+          <label for="sftp_path" class="form-label">Carpeta remota</label>
+          <select class="form-select" id="sftp_path"></select>
+        </div>
+        <div id="sftp-details" class="text-muted small"></div>
+        <div id="sftp-empty" class="alert alert-warning d-none" role="alert">
+          No hay carpetas SFTP disponibles. Revisá la configuración del servidor.
+        </div>
+      </div>
+
+      <div class="remote-panel d-none" data-remote-panel="drive">
+        <h2 class="h5">Google Drive</h2>
+        <p>Segu&iacute; estos pasos para obtener el token manual:</p>
+        <ol>
+          <li>Abrí el asistente de rclone para Google Drive desde <a id="drive-doc-link" href="https://rclone.org/drive/" target="_blank" rel="noopener">la documentación oficial</a>.</li>
+          <li>Generá un token OAuth siguiendo las instrucciones de rclone.</li>
+          <li>Pegá el JSON del token en el campo siguiente y probá la conexión.</li>
+        </ol>
+        <div class="mb-3">
+          <label for="drive_token" class="form-label">Token de acceso</label>
+          <textarea id="drive_token" class="form-control" rows="4" placeholder='{"access_token": "..."}'></textarea>
+        </div>
+        <button type="button" class="btn btn-outline-secondary" id="drive-test-token">Probar token</button>
+        <div id="drive-token-feedback" class="form-text mt-2"></div>
+      </div>
+
+      <div class="remote-panel d-none" data-remote-panel="onedrive">
+        <h2 class="h5">OneDrive</h2>
+        <div class="alert alert-info" role="alert">
+          Integraci&oacute;n en construcci&oacute;n. Pronto vas a poder conectar OneDrive desde aquí.
+        </div>
+      </div>
     </div>
-    <button type="submit" class="btn btn-primary">Guardar</button>
+
+    <div class="mt-4">
+      <button type="submit" class="btn btn-primary">Guardar remote</button>
+    </div>
   </form>
-  <h2 class="mt-5">Autorizar Remote</h2>
-  <div class="mb-3">
-    <label for="auth_remote" class="form-label">Remote</label>
-    <select class="form-select" id="auth_remote"></select>
-  </div>
-  <button id="start-auth" class="btn btn-secondary mb-3">Iniciar autorización</button>
-  <div id="auth-url-container" class="mb-3" style="display:none;">
-    <div class="input-group mb-2">
-      <input id="auth_url" type="text" class="form-control" readonly>
-      <button class="btn btn-outline-secondary" type="button" id="copy-auth-url">Copiar</button>
-    </div>
-    <a id="auth_link" href="#" target="_blank" class="d-block"></a>
-  </div>
-  <div class="mb-3">
-    <label for="auth_code" class="form-label">Código de verificación</label>
-    <textarea id="auth_code" class="form-control" rows="3"></textarea>
-  </div>
-  <button id="finish-auth" class="btn btn-primary">Finalizar autorización</button>
 </div>
 {% endblock %}

@@ -1,5 +1,7 @@
 import os
+import re
 import subprocess
+import tempfile
 from functools import wraps
 from flask import (
     Flask,
@@ -22,10 +24,6 @@ from orchestrator.scheduler import (
     run_backup,
 )
 from orchestrator.services.client import _normalize_remote
-from orchestrator.services.rclone import (
-    authorize_drive,
-    complete_drive_authorization,
-)
 
 
 DEFAULT_RCLONE_CONFIG = "/config/rclone/rclone.conf"
@@ -50,6 +48,34 @@ def create_app() -> Flask:
     admin_user = os.getenv("APP_ADMIN_USER")
     admin_pass = os.getenv("APP_ADMIN_PASS")
     app.secret_key = os.getenv("APP_SECRET_KEY", "devkey")
+
+    def _parse_directory_config(value: str) -> list[dict[str, str]]:
+        """Parse a delimited list of directories from *value*."""
+
+        entries: list[dict[str, str]] = []
+        if not value:
+            return entries
+        for raw in re.split(r"[;,\n]+", value):
+            item = raw.strip()
+            if not item:
+                continue
+            label, sep, path = item.partition("|")
+            if sep:
+                label = label.strip() or path.strip()
+                path = path.strip()
+            else:
+                path = label.strip()
+                label = path
+            if not path:
+                continue
+            entries.append({"label": label.strip(), "path": path})
+        return entries
+
+    def get_local_directories() -> list[dict[str, str]]:
+        return _parse_directory_config(os.getenv("RCLONE_LOCAL_DIRECTORIES", ""))
+
+    def get_sftp_directories() -> list[dict[str, str]]:
+        return _parse_directory_config(os.getenv("RCLONE_SFTP_DIRECTORIES", ""))
 
     def login_required(func):
         @wraps(func)
@@ -161,6 +187,78 @@ def create_app() -> Flask:
         remotes = [r.strip().rstrip(":") for r in result.stdout.splitlines() if r.strip()]
         return jsonify(remotes)
 
+    @app.get("/rclone/remotes/options/<remote_type>")
+    @login_required
+    def remote_options(remote_type: str) -> tuple[dict, int] | dict:
+        """Return UI options for the requested remote *remote_type*."""
+
+        normalized = (remote_type or "").lower()
+        if normalized == "local":
+            return jsonify({"directories": get_local_directories()})
+        if normalized == "sftp":
+            data: dict[str, object] = {"directories": get_sftp_directories()}
+            host = os.getenv("RCLONE_SFTP_HOST")
+            if host:
+                data["host"] = host
+            port = os.getenv("RCLONE_SFTP_PORT")
+            if port:
+                data["port"] = port
+            return jsonify(data)
+        if normalized == "drive":
+            return jsonify({"supports_validation": True})
+        if normalized == "onedrive":
+            return jsonify({"status": "under_construction"})
+        return {"error": "unsupported remote type"}, 400
+
+    @app.post("/rclone/remotes/drive/validate")
+    @login_required
+    def validate_drive_token() -> tuple[dict, int]:
+        """Validate a Google Drive token without persisting configuration."""
+
+        data = request.get_json(force=True) or {}
+        token = (data.get("token") or "").strip()
+        if not token:
+            return {"error": "token is required"}, 400
+
+        temp_path: str | None = None
+        try:
+            tmp = tempfile.NamedTemporaryFile(delete=False)
+            temp_path = tmp.name
+            tmp.close()
+            args = [
+                "--config",
+                temp_path,
+                "config",
+                "create",
+                "__validate__",
+                "drive",
+                "token",
+                token,
+                "scope",
+                os.getenv("RCLONE_DRIVE_SCOPE", "drive"),
+                "--no-auto-auth",
+                "--non-interactive",
+            ]
+            client_id = os.getenv("RCLONE_DRIVE_CLIENT_ID")
+            client_secret = os.getenv("RCLONE_DRIVE_CLIENT_SECRET")
+            if client_id:
+                args.extend(["client_id", client_id])
+            if client_secret:
+                args.extend(["client_secret", client_secret])
+            run_rclone(args, capture_output=True, text=True, check=True)
+        except RuntimeError:
+            return {"error": "rclone is not installed"}, 500
+        except subprocess.CalledProcessError as exc:
+            error = (exc.stderr or exc.stdout or "").strip() or "failed to validate token"
+            return {"error": error}, 400
+        finally:
+            if temp_path and os.path.exists(temp_path):
+                try:
+                    os.unlink(temp_path)
+                except OSError:
+                    pass
+        return {"status": "ok"}, 200
+
     @app.post("/rclone/remotes")
     @login_required
     def create_rclone_remote() -> tuple[dict, int]:
@@ -169,22 +267,94 @@ def create_app() -> Flask:
         if not data or not data.get("name") or not data.get("type"):
             return {"error": "invalid payload"}, 400
         allowed_types = {"drive", "onedrive", "sftp", "local"}
-        if data["type"] not in allowed_types:
+        remote_type = data["type"]
+        if remote_type not in allowed_types:
             return {"error": "unsupported remote type"}, 400
-        defaults: dict[str, list[str]] = {
-            "drive": ["scope", "drive", "--no-auto-auth"],
-            "onedrive": ["--no-auto-auth"],
-            "sftp": [],
-            "local": [],
-        }
-        args = [
-            "--non-interactive",
-            "config",
-            "create",
-            data["name"],
-            data["type"],
-            *defaults.get(data["type"], []),
-        ]
+        name = (data.get("name") or "").strip()
+        if not name:
+            return {"error": "invalid payload"}, 400
+        settings = data.get("settings") or {}
+        args: list[str]
+        if remote_type == "onedrive":
+            return {"error": "OneDrive aún está en construcción"}, 400
+        if remote_type == "drive":
+            token = (settings.get("token") or "").strip()
+            if not token:
+                return {"error": "token is required"}, 400
+            args = [
+                "--non-interactive",
+                "config",
+                "create",
+                name,
+                "drive",
+                "token",
+                token,
+                "scope",
+                os.getenv("RCLONE_DRIVE_SCOPE", "drive"),
+                "--no-auto-auth",
+            ]
+            client_id = os.getenv("RCLONE_DRIVE_CLIENT_ID")
+            client_secret = os.getenv("RCLONE_DRIVE_CLIENT_SECRET")
+            if client_id:
+                args.extend(["client_id", client_id])
+            if client_secret:
+                args.extend(["client_secret", client_secret])
+        elif remote_type == "local":
+            directories = {entry["path"] for entry in get_local_directories()}
+            if not directories:
+                return {"error": "no local directories configured"}, 500
+            path = (settings.get("path") or "").strip()
+            if not path:
+                return {"error": "path is required"}, 400
+            if path not in directories:
+                return {"error": "invalid path"}, 400
+            args = [
+                "--non-interactive",
+                "config",
+                "create",
+                name,
+                "alias",
+                "remote",
+                path,
+            ]
+        elif remote_type == "sftp":
+            directories = {entry["path"] for entry in get_sftp_directories()}
+            if not directories:
+                return {"error": "no sftp directories configured"}, 500
+            path = (settings.get("path") or "").strip()
+            if not path:
+                return {"error": "path is required"}, 400
+            if path not in directories:
+                return {"error": "invalid path"}, 400
+            host = os.getenv("RCLONE_SFTP_HOST")
+            user = os.getenv("RCLONE_SFTP_USER")
+            port = os.getenv("RCLONE_SFTP_PORT")
+            password = os.getenv("RCLONE_SFTP_PASSWORD")
+            key_file = os.getenv("RCLONE_SFTP_KEY_FILE")
+            if not host or not user:
+                return {"error": "sftp connection is not configured"}, 500
+            if not password and not key_file:
+                return {"error": "sftp credentials are not configured"}, 500
+            args = [
+                "--non-interactive",
+                "config",
+                "create",
+                name,
+                "sftp",
+                "host",
+                host,
+                "user",
+                user,
+            ]
+            if port:
+                args.extend(["port", port])
+            if password:
+                args.extend(["pass", password])
+            if key_file:
+                args.extend(["key_file", key_file])
+            args.extend(["path", path])
+        else:
+            return {"error": "unsupported remote type"}, 400
         try:
             run_rclone(args, capture_output=True, text=True, check=True)
         except RuntimeError:
@@ -292,44 +462,6 @@ def create_app() -> Flask:
     def run_app_backup(app_id: int):
         run_backup(app_id)
         return {"status": "started"}, 202
-
-    @app.get("/rclone/remotes/<name>/authorize")
-    @login_required
-    def authorize_remote_url(name: str):
-        try:
-            session_id, url = authorize_drive(name)
-        except RuntimeError as exc:
-            message = str(exc)
-            status = 500 if message == "rclone is not installed" else 400
-            return {"error": message}, status
-        return {"url": url, "session_id": session_id}, 200
-
-    @app.post("/rclone/remotes/<name>/authorize")
-    @login_required
-    def authorize_remote(name: str):
-        """Complete authorization for an rclone remote."""
-        data = request.get_json(silent=True) or {}
-        session_id = data.get("session_id")
-        code = data.get("code")
-        if not session_id or not code:
-            return {"error": "invalid payload"}, 400
-        try:
-            token = complete_drive_authorization(session_id, code)
-        except RuntimeError as exc:
-            return {"error": str(exc)}, 400
-        try:
-            run_rclone(
-                ["config", "update", name, "token", token],
-                check=True,
-                capture_output=True,
-                text=True,
-            )
-        except RuntimeError:
-            return {"error": "rclone is not installed"}, 500
-        except subprocess.CalledProcessError as exc:
-            error = (exc.stderr or exc.stdout or "").strip() or "failed to update remote"
-            return {"error": error}, 400
-        return {"status": "ok"}, 200
 
     return app
 

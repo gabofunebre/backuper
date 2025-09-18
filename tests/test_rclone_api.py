@@ -90,7 +90,8 @@ def test_create_rclone_remote_missing_binary(monkeypatch, app):
     client = app.test_client()
     client.post("/login", data={"username": "admin", "password": "secret"})
     resp = client.post(
-        "/rclone/remotes", json={"name": "foo", "type": "drive"}
+        "/rclone/remotes",
+        json={"name": "foo", "type": "drive", "settings": {"token": "tok"}},
     )
     assert resp.status_code == 500
     assert resp.get_json() == {"error": "rclone is not installed"}
@@ -118,7 +119,10 @@ def test_create_rclone_remote_success(monkeypatch, app):
     monkeypatch.setattr(subprocess, "run", fake_run)
     client = app.test_client()
     client.post("/login", data={"username": "admin", "password": "secret"})
-    resp = client.post("/rclone/remotes", json={"name": "foo", "type": "drive"})
+    resp = client.post(
+        "/rclone/remotes",
+        json={"name": "foo", "type": "drive", "settings": {"token": "tok"}},
+    )
     assert resp.status_code == 201
     assert resp.get_json() == {"status": "ok"}
     cmd = calls[0]
@@ -133,6 +137,9 @@ def test_create_rclone_remote_success(monkeypatch, app):
     assert "drive" in cmd
     assert "scope" in cmd
     assert "--no-auto-auth" in cmd
+    assert "token" in cmd
+    token_index = cmd.index("token")
+    assert cmd[token_index + 1] == "tok"
 
 
 def test_create_rclone_remote_nested_config_path(monkeypatch, app, tmp_path):
@@ -155,7 +162,10 @@ def test_create_rclone_remote_nested_config_path(monkeypatch, app, tmp_path):
     client.post("/login", data={"username": "admin", "password": "secret"})
 
     monkeypatch.setenv("RCLONE_CONFIG", str(nested_config))
-    resp = client.post("/rclone/remotes", json={"name": "foo", "type": "drive"})
+    resp = client.post(
+        "/rclone/remotes",
+        json={"name": "foo", "type": "drive", "settings": {"token": "tok"}},
+    )
     assert resp.status_code == 201
     assert resp.get_json() == {"status": "ok"}
     assert nested_config.parent.is_dir()
@@ -168,7 +178,10 @@ def test_create_rclone_remote_nested_config_path(monkeypatch, app, tmp_path):
     monkeypatch.delenv("RCLONE_CONFIG", raising=False)
     app_module = importlib.import_module("orchestrator.app")
     monkeypatch.setattr(app_module, "DEFAULT_RCLONE_CONFIG", str(default_config))
-    resp = client.post("/rclone/remotes", json={"name": "bar", "type": "drive"})
+    resp = client.post(
+        "/rclone/remotes",
+        json={"name": "bar", "type": "drive", "settings": {"token": "tok"}},
+    )
     assert resp.status_code == 201
     assert resp.get_json() == {"status": "ok"}
     assert default_config.parent.is_dir()
@@ -185,6 +198,9 @@ def test_create_rclone_remote_failure(monkeypatch, app):
     monkeypatch.setattr(subprocess, "run", fake_run)
     client = app.test_client()
     client.post("/login", data={"username": "admin", "password": "secret"})
-    resp = client.post("/rclone/remotes", json={"name": "foo", "type": "drive"})
+    resp = client.post(
+        "/rclone/remotes",
+        json={"name": "foo", "type": "drive", "settings": {"token": "tok"}},
+    )
     assert resp.status_code == 400
     assert resp.get_json() == {"error": "boom"}
