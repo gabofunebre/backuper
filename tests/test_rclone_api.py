@@ -194,12 +194,16 @@ def test_create_rclone_remote_custom_success(monkeypatch, app):
 def test_create_rclone_remote_shared_success(monkeypatch, app):
     calls: list[list[str]] = []
 
-    class DummyResult:
-        stderr = ""
-        stdout = ""
-
     def fake_run(cmd, capture_output, text, check):
         calls.append(cmd)
+
+        class DummyResult:
+            def __init__(self, stdout: str = "", stderr: str = "") -> None:
+                self.stdout = stdout
+                self.stderr = stderr
+
+        if cmd[-1] == "listremotes":
+            return DummyResult(stdout="gdrive:\n")
         return DummyResult()
 
     monkeypatch.setenv("RCLONE_REMOTE", "gdrive")
@@ -216,9 +220,10 @@ def test_create_rclone_remote_shared_success(monkeypatch, app):
     )
     assert resp.status_code == 201
     assert resp.get_json() == {"status": "ok"}
-    assert len(calls) == 3
+    assert len(calls) == 4
     config_path = os.getenv("RCLONE_CONFIG")
-    mkdir_cmd, share_cmd, alias_cmd = calls
+    list_cmd, mkdir_cmd, share_cmd, alias_cmd = calls
+    assert list_cmd == ["rclone", "--config", config_path, "listremotes"]
     assert mkdir_cmd[:3] == ["rclone", "--config", config_path]
     assert mkdir_cmd[3] == "mkdir"
     assert mkdir_cmd[4] == "gdrive:foo"
@@ -548,11 +553,14 @@ def test_create_rclone_remote_shared_missing_email(app):
 
 
 def test_create_rclone_remote_shared_share_failure(monkeypatch, app):
-    class DummyResult:
-        stderr = ""
-        stdout = ""
-
     def fake_run(cmd, capture_output, text, check):
+        class DummyResult:
+            def __init__(self, stdout: str = "", stderr: str = "") -> None:
+                self.stdout = stdout
+                self.stderr = stderr
+
+        if cmd[-1] == "listremotes":
+            return DummyResult(stdout="gdrive:\n")
         if "mkdir" in cmd:
             return DummyResult()
         if "share" in cmd:
@@ -588,3 +596,103 @@ def test_create_rclone_remote_invalid_drive_mode(app):
     )
     assert resp.status_code == 400
     assert resp.get_json() == {"error": "invalid drive mode"}
+
+
+def test_create_rclone_remote_shared_bootstrap_default_remote(monkeypatch, app):
+    calls: list[list[str]] = []
+
+    def fake_run(cmd, capture_output, text, check):
+        calls.append(cmd)
+
+        class DummyResult:
+            def __init__(self, stdout: str = "", stderr: str = "") -> None:
+                self.stdout = stdout
+                self.stderr = stderr
+
+        if cmd[-1] == "listremotes":
+            return DummyResult(stdout="")
+        return DummyResult()
+
+    monkeypatch.setenv("RCLONE_REMOTE", "gdrive")
+    monkeypatch.setenv("RCLONE_DRIVE_CLIENT_ID", "cid")
+    monkeypatch.setenv("RCLONE_DRIVE_CLIENT_SECRET", "sec")
+    monkeypatch.setenv("RCLONE_DRIVE_TOKEN", "token-json")
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    client = app.test_client()
+    client.post("/login", data={"username": "admin", "password": "secret"})
+    resp = client.post(
+        "/rclone/remotes",
+        json={
+            "name": "foo",
+            "type": "drive",
+            "settings": {"mode": "shared", "email": "user@example.com"},
+        },
+    )
+    assert resp.status_code == 201
+    assert resp.get_json() == {"status": "ok"}
+    config_path = os.getenv("RCLONE_CONFIG")
+    assert len(calls) == 5
+    list_cmd, default_create, mkdir_cmd, share_cmd, alias_cmd = calls
+    assert list_cmd == ["rclone", "--config", config_path, "listremotes"]
+    assert default_create[:5] == [
+        "rclone",
+        "--config",
+        config_path,
+        "config",
+        "create",
+    ]
+    assert default_create[5] == "--non-interactive"
+    assert default_create[6] == "gdrive"
+    assert default_create[7] == "drive"
+    assert "token" in default_create
+    token_index = default_create.index("token")
+    assert default_create[token_index + 1] == "token-json"
+    assert "client_id" in default_create
+    assert default_create[default_create.index("client_id") + 1] == "cid"
+    assert "client_secret" in default_create
+    assert default_create[default_create.index("client_secret") + 1] == "sec"
+    assert mkdir_cmd[3] == "mkdir"
+    assert share_cmd[3:6] == ["backend", "command", "gdrive:foo"]
+    assert alias_cmd[3:9] == [
+        "config",
+        "create",
+        "--non-interactive",
+        "foo",
+        "alias",
+        "remote",
+    ]
+
+
+def test_create_rclone_remote_shared_missing_default_remote(monkeypatch, app):
+    calls: list[list[str]] = []
+
+    def fake_run(cmd, capture_output, text, check):
+        calls.append(cmd)
+
+        class DummyResult:
+            def __init__(self, stdout: str = "", stderr: str = "") -> None:
+                self.stdout = stdout
+                self.stderr = stderr
+
+        if cmd[-1] == "listremotes":
+            return DummyResult(stdout="")
+        raise AssertionError("unexpected command execution order")
+
+    monkeypatch.setenv("RCLONE_REMOTE", "gdrive")
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    client = app.test_client()
+    client.post("/login", data={"username": "admin", "password": "secret"})
+    resp = client.post(
+        "/rclone/remotes",
+        json={
+            "name": "foo",
+            "type": "drive",
+            "settings": {"mode": "shared", "email": "user@example.com"},
+        },
+    )
+    assert resp.status_code == 500
+    assert resp.get_json() == {
+        "error": "La cuenta global de Google Drive no está configurada. Revisá las variables RCLONE_DRIVE_CLIENT_ID, RCLONE_DRIVE_CLIENT_SECRET y RCLONE_DRIVE_TOKEN.",
+    }
+    config_path = os.getenv("RCLONE_CONFIG")
+    assert calls == [["rclone", "--config", config_path, "listremotes"]]
