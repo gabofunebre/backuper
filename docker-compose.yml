@@ -8,12 +8,12 @@ services:
       - backups:/backups
     networks:
       - backups_net
-      - cloudflared_net
+      - Backuper_tunn_net
 volumes:
   backups:
 networks:
   backups_net:
     driver: bridge
     name: backups_net
-  cloudflared_net:
+  Backuper_tunn_net:
     external: true
