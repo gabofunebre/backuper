@@ -74,9 +74,6 @@ def create_app() -> Flask:
     def get_local_directories() -> list[dict[str, str]]:
         return _parse_directory_config(os.getenv("RCLONE_LOCAL_DIRECTORIES", ""))
 
-    def get_sftp_directories() -> list[dict[str, str]]:
-        return _parse_directory_config(os.getenv("RCLONE_SFTP_DIRECTORIES", ""))
-
     def login_required(func):
         @wraps(func)
         def wrapper(*args, **kwargs):
@@ -196,14 +193,7 @@ def create_app() -> Flask:
         if normalized == "local":
             return jsonify({"directories": get_local_directories()})
         if normalized == "sftp":
-            data: dict[str, object] = {"directories": get_sftp_directories()}
-            host = os.getenv("RCLONE_SFTP_HOST")
-            if host:
-                data["host"] = host
-            port = os.getenv("RCLONE_SFTP_PORT")
-            if port:
-                data["port"] = port
-            return jsonify(data)
+            return jsonify({"requires_credentials": True})
         if normalized == "drive":
             return jsonify({"supports_validation": True})
         if normalized == "onedrive":
@@ -275,6 +265,7 @@ def create_app() -> Flask:
             return {"error": "invalid payload"}, 400
         settings = data.get("settings") or {}
         args: list[str]
+        post_config_commands: list[list[str]] = []
         if remote_type == "onedrive":
             return {"error": "OneDrive aún está en construcción"}, 400
         if remote_type == "drive":
@@ -318,23 +309,18 @@ def create_app() -> Flask:
                 path,
             ]
         elif remote_type == "sftp":
-            directories = {entry["path"] for entry in get_sftp_directories()}
-            if not directories:
-                return {"error": "no sftp directories configured"}, 500
-            path = (settings.get("path") or "").strip()
-            if not path:
-                return {"error": "path is required"}, 400
-            if path not in directories:
-                return {"error": "invalid path"}, 400
-            host = os.getenv("RCLONE_SFTP_HOST")
-            user = os.getenv("RCLONE_SFTP_USER")
-            port = os.getenv("RCLONE_SFTP_PORT")
-            password = os.getenv("RCLONE_SFTP_PASSWORD")
-            key_file = os.getenv("RCLONE_SFTP_KEY_FILE")
-            if not host or not user:
-                return {"error": "sftp connection is not configured"}, 500
-            if not password and not key_file:
-                return {"error": "sftp credentials are not configured"}, 500
+            host = (settings.get("host") or "").strip()
+            username = (settings.get("username") or settings.get("user") or "").strip()
+            password = (settings.get("password") or "").strip()
+            port = (settings.get("port") or "").strip()
+            if not host:
+                return {"error": "host is required"}, 400
+            if not username:
+                return {"error": "username is required"}, 400
+            if not password:
+                return {"error": "password is required"}, 400
+            if port and not port.isdigit():
+                return {"error": "invalid port"}, 400
             args = [
                 "--non-interactive",
                 "config",
@@ -344,19 +330,34 @@ def create_app() -> Flask:
                 "host",
                 host,
                 "user",
-                user,
+                username,
             ]
             if port:
                 args.extend(["port", port])
-            if password:
-                args.extend(["pass", password])
-            if key_file:
-                args.extend(["key_file", key_file])
-            args.extend(["path", path])
+            args.extend(["pass", password])
+            post_config_commands = [
+                ["lsd", f"{name}:"],
+                ["mkdir", f"{name}:{name}"],
+            ]
         else:
             return {"error": "unsupported remote type"}, 400
         try:
             run_rclone(args, capture_output=True, text=True, check=True)
+            for extra_args in post_config_commands:
+                try:
+                    run_rclone(extra_args, capture_output=True, text=True, check=True)
+                except subprocess.CalledProcessError as exc:
+                    try:
+                        run_rclone(
+                            ["config", "delete", name],
+                            capture_output=True,
+                            text=True,
+                            check=True,
+                        )
+                    except Exception:
+                        pass
+                    error = (exc.stderr or exc.stdout or "").strip() or "failed to create remote"
+                    return {"error": error}, 400
         except RuntimeError:
             return {"error": "rclone is not installed"}, 500
         except subprocess.CalledProcessError as exc:
