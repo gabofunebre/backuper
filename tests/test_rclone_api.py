@@ -82,6 +82,34 @@ def test_list_rclone_remotes_missing_binary(monkeypatch, app):
     assert resp.get_json() == {"error": "rclone is not installed"}
 
 
+def test_validate_drive_token_with_custom_client(monkeypatch, app):
+    calls: list[list[str]] = []
+
+    class DummyResult:
+        stdout = ""
+        stderr = ""
+
+    def fake_run(cmd, capture_output, text, check):
+        calls.append(cmd)
+        return DummyResult()
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    client = app.test_client()
+    client.post("/login", data={"username": "admin", "password": "secret"})
+    resp = client.post(
+        "/rclone/remotes/drive/validate",
+        json={"token": "tok", "client_id": "cid", "client_secret": "sec"},
+    )
+    assert resp.status_code == 200
+    assert resp.get_json() == {"status": "ok"}
+    cmd = calls[0]
+    assert "--config" in cmd
+    assert "client_id" in cmd
+    assert cmd[cmd.index("client_id") + 1] == "cid"
+    assert "client_secret" in cmd
+    assert cmd[cmd.index("client_secret") + 1] == "sec"
+
+
 def test_create_rclone_remote_missing_binary(monkeypatch, app):
     def fake_run(*args, **kwargs):
         raise FileNotFoundError()
@@ -91,7 +119,11 @@ def test_create_rclone_remote_missing_binary(monkeypatch, app):
     client.post("/login", data={"username": "admin", "password": "secret"})
     resp = client.post(
         "/rclone/remotes",
-        json={"name": "foo", "type": "drive", "settings": {"token": "tok"}},
+        json={
+            "name": "foo",
+            "type": "drive",
+            "settings": {"mode": "custom", "token": "tok"},
+        },
     )
     assert resp.status_code == 500
     assert resp.get_json() == {"error": "rclone is not installed"}
@@ -105,7 +137,7 @@ def test_create_rclone_remote_unsupported_type(app):
     assert resp.get_json() == {"error": "unsupported remote type"}
 
 
-def test_create_rclone_remote_success(monkeypatch, app):
+def test_create_rclone_remote_custom_success(monkeypatch, app):
     calls = []
 
     class DummyResult:
@@ -121,7 +153,16 @@ def test_create_rclone_remote_success(monkeypatch, app):
     client.post("/login", data={"username": "admin", "password": "secret"})
     resp = client.post(
         "/rclone/remotes",
-        json={"name": "foo", "type": "drive", "settings": {"token": "tok"}},
+        json={
+            "name": "foo",
+            "type": "drive",
+            "settings": {
+                "mode": "custom",
+                "token": "tok",
+                "client_id": "cid",
+                "client_secret": "sec",
+            },
+        },
     )
     assert resp.status_code == 201
     assert resp.get_json() == {"status": "ok"}
@@ -140,6 +181,63 @@ def test_create_rclone_remote_success(monkeypatch, app):
     assert "token" in cmd
     token_index = cmd.index("token")
     assert cmd[token_index + 1] == "tok"
+    assert "client_id" in cmd
+    assert cmd[cmd.index("client_id") + 1] == "cid"
+    assert "client_secret" in cmd
+    assert cmd[cmd.index("client_secret") + 1] == "sec"
+
+
+def test_create_rclone_remote_shared_success(monkeypatch, app):
+    calls: list[list[str]] = []
+
+    class DummyResult:
+        stderr = ""
+        stdout = ""
+
+    def fake_run(cmd, capture_output, text, check):
+        calls.append(cmd)
+        return DummyResult()
+
+    monkeypatch.setenv("RCLONE_REMOTE", "gdrive")
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    client = app.test_client()
+    client.post("/login", data={"username": "admin", "password": "secret"})
+    resp = client.post(
+        "/rclone/remotes",
+        json={
+            "name": "foo",
+            "type": "drive",
+            "settings": {"mode": "shared", "email": "user@example.com"},
+        },
+    )
+    assert resp.status_code == 201
+    assert resp.get_json() == {"status": "ok"}
+    assert len(calls) == 3
+    config_path = os.getenv("RCLONE_CONFIG")
+    mkdir_cmd, share_cmd, alias_cmd = calls
+    assert mkdir_cmd[:3] == ["rclone", "--config", config_path]
+    assert mkdir_cmd[3] == "mkdir"
+    assert mkdir_cmd[4] == "gdrive:foo"
+    assert share_cmd[:3] == ["rclone", "--config", config_path]
+    assert share_cmd[3:6] == ["backend", "command", "gdrive:foo"]
+    share_index = share_cmd.index("share")
+    assert share_cmd[share_index + 1 : share_index + 4] == [
+        "--share-with",
+        "user@example.com",
+        "--type",
+    ]
+    assert share_cmd[share_index + 4 : share_index + 6] == ["user", "--role"]
+    assert share_cmd[share_index + 6] == "writer"
+    assert alias_cmd[:3] == ["rclone", "--config", config_path]
+    assert alias_cmd[3:9] == [
+        "--non-interactive",
+        "config",
+        "create",
+        "foo",
+        "alias",
+        "remote",
+    ]
+    assert alias_cmd[9] == "gdrive:foo"
 
 
 def test_create_rclone_remote_nested_config_path(monkeypatch, app, tmp_path):
@@ -164,7 +262,11 @@ def test_create_rclone_remote_nested_config_path(monkeypatch, app, tmp_path):
     monkeypatch.setenv("RCLONE_CONFIG", str(nested_config))
     resp = client.post(
         "/rclone/remotes",
-        json={"name": "foo", "type": "drive", "settings": {"token": "tok"}},
+        json={
+            "name": "foo",
+            "type": "drive",
+            "settings": {"mode": "custom", "token": "tok"},
+        },
     )
     assert resp.status_code == 201
     assert resp.get_json() == {"status": "ok"}
@@ -180,7 +282,11 @@ def test_create_rclone_remote_nested_config_path(monkeypatch, app, tmp_path):
     monkeypatch.setattr(app_module, "DEFAULT_RCLONE_CONFIG", str(default_config))
     resp = client.post(
         "/rclone/remotes",
-        json={"name": "bar", "type": "drive", "settings": {"token": "tok"}},
+        json={
+            "name": "bar",
+            "type": "drive",
+            "settings": {"mode": "custom", "token": "tok"},
+        },
     )
     assert resp.status_code == 201
     assert resp.get_json() == {"status": "ok"}
@@ -200,7 +306,80 @@ def test_create_rclone_remote_failure(monkeypatch, app):
     client.post("/login", data={"username": "admin", "password": "secret"})
     resp = client.post(
         "/rclone/remotes",
-        json={"name": "foo", "type": "drive", "settings": {"token": "tok"}},
+        json={
+            "name": "foo",
+            "type": "drive",
+            "settings": {"mode": "custom", "token": "tok"},
+        },
     )
     assert resp.status_code == 400
     assert resp.get_json() == {"error": "boom"}
+
+
+def test_create_rclone_remote_shared_invalid_email(app):
+    client = app.test_client()
+    client.post("/login", data={"username": "admin", "password": "secret"})
+    resp = client.post(
+        "/rclone/remotes",
+        json={
+            "name": "foo",
+            "type": "drive",
+            "settings": {"mode": "shared", "email": "not-an-email"},
+        },
+    )
+    assert resp.status_code == 400
+    assert resp.get_json() == {"error": "invalid email"}
+
+
+def test_create_rclone_remote_shared_missing_email(app):
+    client = app.test_client()
+    client.post("/login", data={"username": "admin", "password": "secret"})
+    resp = client.post(
+        "/rclone/remotes",
+        json={"name": "foo", "type": "drive", "settings": {"mode": "shared"}},
+    )
+    assert resp.status_code == 400
+    assert resp.get_json() == {"error": "email is required"}
+
+
+def test_create_rclone_remote_shared_share_failure(monkeypatch, app):
+    class DummyResult:
+        stderr = ""
+        stdout = ""
+
+    def fake_run(cmd, capture_output, text, check):
+        if "mkdir" in cmd:
+            return DummyResult()
+        if "share" in cmd:
+            raise subprocess.CalledProcessError(1, cmd, stderr="share failed")
+        raise AssertionError("unexpected command execution order")
+
+    monkeypatch.setenv("RCLONE_REMOTE", "gdrive")
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    client = app.test_client()
+    client.post("/login", data={"username": "admin", "password": "secret"})
+    resp = client.post(
+        "/rclone/remotes",
+        json={
+            "name": "foo",
+            "type": "drive",
+            "settings": {"mode": "shared", "email": "user@example.com"},
+        },
+    )
+    assert resp.status_code == 400
+    assert resp.get_json() == {"error": "share failed"}
+
+
+def test_create_rclone_remote_invalid_drive_mode(app):
+    client = app.test_client()
+    client.post("/login", data={"username": "admin", "password": "secret"})
+    resp = client.post(
+        "/rclone/remotes",
+        json={
+            "name": "foo",
+            "type": "drive",
+            "settings": {"mode": "unknown", "token": "tok"},
+        },
+    )
+    assert resp.status_code == 400
+    assert resp.get_json() == {"error": "invalid drive mode"}

@@ -210,6 +210,13 @@ def create_app() -> Flask:
         if not token:
             return {"error": "token is required"}, 400
 
+        client_id = (data.get("client_id") or os.getenv("RCLONE_DRIVE_CLIENT_ID") or "").strip()
+        client_secret = (
+            data.get("client_secret")
+            or os.getenv("RCLONE_DRIVE_CLIENT_SECRET")
+            or ""
+        ).strip()
+
         temp_path: str | None = None
         try:
             tmp = tempfile.NamedTemporaryFile(delete=False)
@@ -229,8 +236,6 @@ def create_app() -> Flask:
                 "--no-auto-auth",
                 "--non-interactive",
             ]
-            client_id = os.getenv("RCLONE_DRIVE_CLIENT_ID")
-            client_secret = os.getenv("RCLONE_DRIVE_CLIENT_SECRET")
             if client_id:
                 args.extend(["client_id", client_id])
             if client_secret:
@@ -265,31 +270,81 @@ def create_app() -> Flask:
             return {"error": "invalid payload"}, 400
         settings = data.get("settings") or {}
         args: list[str]
+        pre_config_commands: list[list[str]] = []
         post_config_commands: list[list[str]] = []
+        cleanup_remote_on_error = False
         if remote_type == "onedrive":
             return {"error": "OneDrive aún está en construcción"}, 400
         if remote_type == "drive":
+            mode = (settings.get("mode") or "").strip().lower()
             token = (settings.get("token") or "").strip()
-            if not token:
-                return {"error": "token is required"}, 400
-            args = [
-                "--non-interactive",
-                "config",
-                "create",
-                name,
-                "drive",
-                "token",
-                token,
-                "scope",
-                os.getenv("RCLONE_DRIVE_SCOPE", "drive"),
-                "--no-auto-auth",
-            ]
-            client_id = os.getenv("RCLONE_DRIVE_CLIENT_ID")
-            client_secret = os.getenv("RCLONE_DRIVE_CLIENT_SECRET")
-            if client_id:
-                args.extend(["client_id", client_id])
-            if client_secret:
-                args.extend(["client_secret", client_secret])
+            if not mode:
+                mode = "custom" if token else "shared"
+            if mode not in {"shared", "custom"}:
+                return {"error": "invalid drive mode"}, 400
+            if mode == "shared":
+                email = (settings.get("email") or "").strip()
+                if not email:
+                    return {"error": "email is required"}, 400
+                if "@" not in email:
+                    return {"error": "invalid email"}, 400
+                base_remote = _normalize_remote(
+                    os.getenv("RCLONE_REMOTE", "gdrive")
+                )
+                folder_name = (settings.get("folder_name") or name or "").strip()
+                if not folder_name:
+                    return {"error": "folder name is required"}, 400
+                remote_path = f"{base_remote}{folder_name}"
+                pre_config_commands = [
+                    ["mkdir", remote_path],
+                    [
+                        "backend",
+                        "command",
+                        remote_path,
+                        "share",
+                        "--share-with",
+                        email,
+                        "--type",
+                        os.getenv("RCLONE_DRIVE_SHARE_TYPE", "user"),
+                        "--role",
+                        os.getenv("RCLONE_DRIVE_SHARE_ROLE", "writer"),
+                    ],
+                ]
+                args = [
+                    "--non-interactive",
+                    "config",
+                    "create",
+                    name,
+                    "alias",
+                    "remote",
+                    remote_path,
+                ]
+            else:
+                if not token:
+                    return {"error": "token is required"}, 400
+                args = [
+                    "--non-interactive",
+                    "config",
+                    "create",
+                    name,
+                    "drive",
+                    "token",
+                    token,
+                    "scope",
+                    os.getenv("RCLONE_DRIVE_SCOPE", "drive"),
+                    "--no-auto-auth",
+                ]
+                client_id = (settings.get("client_id") or "").strip() or os.getenv(
+                    "RCLONE_DRIVE_CLIENT_ID"
+                )
+                client_secret = (
+                    (settings.get("client_secret") or "").strip()
+                    or os.getenv("RCLONE_DRIVE_CLIENT_SECRET")
+                )
+                if client_id:
+                    args.extend(["client_id", client_id])
+                if client_secret:
+                    args.extend(["client_secret", client_secret])
         elif remote_type == "local":
             directories = {entry["path"] for entry in get_local_directories()}
             if not directories:
@@ -339,21 +394,25 @@ def create_app() -> Flask:
                 ["lsd", f"{name}:"],
                 ["mkdir", f"{name}:{name}"],
             ]
+            cleanup_remote_on_error = True
         else:
             return {"error": "unsupported remote type"}, 400
         try:
+            for extra_args in pre_config_commands:
+                run_rclone(extra_args, capture_output=True, text=True, check=True)
             run_rclone(args, capture_output=True, text=True, check=True)
             for extra_args in post_config_commands:
                 try:
                     run_rclone(extra_args, capture_output=True, text=True, check=True)
                 except subprocess.CalledProcessError as exc:
                     try:
-                        run_rclone(
-                            ["config", "delete", name],
-                            capture_output=True,
-                            text=True,
-                            check=True,
-                        )
+                        if cleanup_remote_on_error:
+                            run_rclone(
+                                ["config", "delete", name],
+                                capture_output=True,
+                                text=True,
+                                check=True,
+                            )
                     except Exception:
                         pass
                     error = (exc.stderr or exc.stdout or "").strip() or "failed to create remote"
