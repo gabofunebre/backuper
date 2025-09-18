@@ -174,6 +174,10 @@ def test_create_rclone_remote_custom_success(monkeypatch, app):
     assert "--non-interactive" in cmd
     assert "config" in cmd
     assert "create" in cmd
+    create_index = cmd.index("create")
+    assert cmd[create_index - 1] == "config"
+    assert cmd[create_index + 1] == "--non-interactive"
+    assert cmd[create_index + 2] == "foo"
     assert "foo" in cmd
     assert "drive" in cmd
     assert "scope" in cmd
@@ -230,14 +234,54 @@ def test_create_rclone_remote_shared_success(monkeypatch, app):
     assert share_cmd[share_index + 6] == "writer"
     assert alias_cmd[:3] == ["rclone", "--config", config_path]
     assert alias_cmd[3:9] == [
-        "--non-interactive",
         "config",
         "create",
+        "--non-interactive",
         "foo",
         "alias",
         "remote",
     ]
     assert alias_cmd[9] == "gdrive:foo"
+
+
+def test_create_rclone_remote_local_success(monkeypatch, app):
+    calls: list[list[str]] = []
+
+    class DummyResult:
+        stderr = ""
+        stdout = ""
+
+    def fake_run(cmd, capture_output, text, check):
+        calls.append(cmd)
+        return DummyResult()
+
+    monkeypatch.setenv("RCLONE_LOCAL_DIRECTORIES", "/backups")
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    client = app.test_client()
+    client.post("/login", data={"username": "admin", "password": "secret"})
+    resp = client.post(
+        "/rclone/remotes",
+        json={
+            "name": "localbackup",
+            "type": "local",
+            "settings": {"path": "/backups"},
+        },
+    )
+    assert resp.status_code == 201
+    assert resp.get_json() == {"status": "ok"}
+    assert len(calls) == 1
+    cmd = calls[0]
+    config_path = os.getenv("RCLONE_CONFIG")
+    assert cmd[:3] == ["rclone", "--config", config_path]
+    assert cmd[3:9] == [
+        "config",
+        "create",
+        "--non-interactive",
+        "localbackup",
+        "alias",
+        "remote",
+    ]
+    assert cmd[9] == "/backups"
 
 
 def test_create_rclone_remote_nested_config_path(monkeypatch, app, tmp_path):

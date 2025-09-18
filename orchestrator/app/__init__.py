@@ -269,6 +269,7 @@ def create_app() -> Flask:
         if not name:
             return {"error": "invalid payload"}, 400
         settings = data.get("settings") or {}
+        base_args = ["config", "create", "--non-interactive", name]
         args: list[str]
         pre_config_commands: list[list[str]] = []
         post_config_commands: list[list[str]] = []
@@ -310,23 +311,12 @@ def create_app() -> Flask:
                         os.getenv("RCLONE_DRIVE_SHARE_ROLE", "writer"),
                     ],
                 ]
-                args = [
-                    "--non-interactive",
-                    "config",
-                    "create",
-                    name,
-                    "alias",
-                    "remote",
-                    remote_path,
-                ]
+                args = base_args + ["alias", "remote", remote_path]
             else:
                 if not token:
                     return {"error": "token is required"}, 400
                 args = [
-                    "--non-interactive",
-                    "config",
-                    "create",
-                    name,
+                    *base_args,
                     "drive",
                     "token",
                     token,
@@ -354,15 +344,7 @@ def create_app() -> Flask:
                 return {"error": "path is required"}, 400
             if path not in directories:
                 return {"error": "invalid path"}, 400
-            args = [
-                "--non-interactive",
-                "config",
-                "create",
-                name,
-                "alias",
-                "remote",
-                path,
-            ]
+            args = base_args + ["alias", "remote", path]
         elif remote_type == "sftp":
             host = (settings.get("host") or "").strip()
             username = (settings.get("username") or settings.get("user") or "").strip()
@@ -377,10 +359,7 @@ def create_app() -> Flask:
             if port and not port.isdigit():
                 return {"error": "invalid port"}, 400
             args = [
-                "--non-interactive",
-                "config",
-                "create",
-                name,
+                *base_args,
                 "sftp",
                 "host",
                 host,
