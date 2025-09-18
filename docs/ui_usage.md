@@ -38,14 +38,16 @@ funcionalidades ofrece cada sección.
 - El botón **Eliminar** la quita definitivamente del orquestador.
 
 ## 3. Configurar rclone
-1. Ingresar a **Rclone → Configurar** para ejecutar el asistente `rclone config`
-   directamente desde la UI.
-2. Completar **Nombre** y elegir el **Tipo** de backend (`drive`,
-   `onedrive`, `sftp` o `local`) desde el desplegable para crear un *remote*.
+La interfaz permite crear nuevos remotes sin abandonar el navegador.
 
-3. Los remotes existentes se listan en **Rclone → Remotes**, donde se puede
-   comprobar que hayan quedado registrados correctamente.
-   - Para `sftp`, ingresá host, puerto (opcional), usuario y contraseña. El contenedor puede alcanzar al host mediante `host.docker.internal` y el orquestador probará la conexión antes de crear una carpeta con el nombre del remote en el servidor.
+- Ingresá a **Rclone → Remotes** para ver el listado actual y el formulario de alta.
+- Completá **Nombre** y elegí el **Tipo** de backend (`drive`, `onedrive`, `sftp` o `local`). El formulario mostrará los campos necesarios según la opción seleccionada:
+  - Para `local`, seleccioná una carpeta habilitada previamente en `RCLONE_LOCAL_DIRECTORIES`.
+  - Para `sftp`, ingresá host, puerto (opcional), usuario y contraseña. El orquestador valida el acceso creando una carpeta con el nombre del remote en el servidor remoto.
+  - Para `drive`, pegá el token OAuth generado con rclone y utilizá el botón **Probar token** antes de guardar.
+- Al guardar, la UI invoca internamente `rclone config create` y actualiza el listado de remotes disponibles.
+
+> Si preferís concentrarte solo en el formulario, **Rclone → Configurar** ofrece la misma interfaz pero sin el panel de listado.
 
 ## 4. Visor de logs
 - El enlace **Logs** muestra las últimas líneas del log del orquestador.
