@@ -148,34 +148,6 @@ async function showPanelForType(type) {
       }
       showFeedback(err.message, 'danger');
     }
-  } else if (type === 'sftp') {
-    const select = document.getElementById('sftp_path');
-    const details = document.getElementById('sftp-details');
-    try {
-      const data = await fetchDirectoryOptions('sftp');
-      populateDirectorySelect(select, data.directories || [], 'sftp-empty');
-      if (details) {
-        const host = data.host;
-        const port = data.port ? `:${data.port}` : '';
-        if (host) {
-          details.textContent = `Conexión configurada: ${host}${port}`;
-          details.classList.remove('d-none');
-        } else {
-          details.textContent = '';
-          details.classList.add('d-none');
-        }
-      }
-    } catch (err) {
-      if (select) {
-        select.innerHTML = '<option value="">No se pudieron cargar las carpetas</option>';
-        select.disabled = true;
-      }
-      if (details) {
-        details.textContent = '';
-        details.classList.add('d-none');
-      }
-      showFeedback(err.message, 'danger');
-    }
   } else if (type === 'drive') {
     driveValidation = { status: 'idle', token: '' };
     updateDriveFeedback('Recordá probar el token antes de guardar.', 'warning');
@@ -275,13 +247,32 @@ function initRemoteForm() {
       }
       payload.settings.path = value;
     } else if (type === 'sftp') {
-      const select = document.getElementById('sftp_path');
-      const value = select ? select.value : '';
-      if (!value) {
-        showFeedback('Elegí la carpeta del servidor SFTP para este remote.', 'danger');
+      const host = document.getElementById('sftp_host')?.value.trim() || '';
+      const portValue = document.getElementById('sftp_port')?.value.trim() || '';
+      const username = document.getElementById('sftp_username')?.value.trim() || '';
+      const password = document.getElementById('sftp_password')?.value || '';
+      if (!host) {
+        showFeedback('Completá el host del servidor SFTP.', 'danger');
         return;
       }
-      payload.settings.path = value;
+      if (!username) {
+        showFeedback('Indicá el usuario para la conexión SFTP.', 'danger');
+        return;
+      }
+      if (!password) {
+        showFeedback('Ingresá la contraseña del usuario SFTP.', 'danger');
+        return;
+      }
+      if (portValue && !/^\d+$/.test(portValue)) {
+        showFeedback('El puerto SFTP debe ser un número válido.', 'danger');
+        return;
+      }
+      payload.settings.host = host;
+      payload.settings.username = username;
+      payload.settings.password = password;
+      if (portValue) {
+        payload.settings.port = portValue;
+      }
     } else if (type === 'drive') {
       const token = document.getElementById('drive_token')?.value.trim() || '';
       if (!token) {
@@ -322,7 +313,6 @@ function initRemoteForm() {
         driveValidation = { status: 'idle', token: '' };
         updateDriveFeedback('', 'muted');
         delete directoryCache.local;
-        delete directoryCache.sftp;
         showFeedback('Remote guardado correctamente.', 'success');
         loadRemotes();
       } else {

@@ -56,21 +56,12 @@ def test_remote_options_local(monkeypatch):
 
 
 def test_remote_options_sftp(monkeypatch):
-    app, _ = make_app(
-        monkeypatch,
-        RCLONE_SFTP_DIRECTORIES="Backups|/srv/backups",
-        RCLONE_SFTP_HOST="sftp.internal",
-        RCLONE_SFTP_PORT="2222",
-    )
+    app, _ = make_app(monkeypatch)
     client = app.test_client()
     login(client)
     resp = client.get("/rclone/remotes/options/sftp")
     assert resp.status_code == 200
-    assert resp.get_json() == {
-        "directories": [{"label": "Backups", "path": "/srv/backups"}],
-        "host": "sftp.internal",
-        "port": "2222",
-    }
+    assert resp.get_json() == {"requires_credentials": True}
 
 
 def test_drive_validate_success(monkeypatch):
@@ -190,18 +181,11 @@ def test_create_local_remote_invalid_path(monkeypatch):
 
 
 def test_create_sftp_remote_success(monkeypatch):
-    app, app_module = make_app(
-        monkeypatch,
-        RCLONE_SFTP_DIRECTORIES="Backups|/srv/backups",
-        RCLONE_SFTP_HOST="sftp.internal",
-        RCLONE_SFTP_USER="backup",
-        RCLONE_SFTP_PASSWORD="secret",
-    )
-    recorded: dict[str, object] = {}
+    app, app_module = make_app(monkeypatch)
+    calls: list[dict[str, object]] = []
 
     def fake_run(cmd, **kwargs):
-        recorded["cmd"] = cmd
-        recorded["kwargs"] = kwargs
+        calls.append({"cmd": cmd, "kwargs": kwargs})
         return SimpleNamespace(stdout="", stderr="")
 
     monkeypatch.setattr(app_module.subprocess, "run", fake_run)
@@ -210,33 +194,111 @@ def test_create_sftp_remote_success(monkeypatch):
     payload = {
         "name": "sftp1",
         "type": "sftp",
-        "settings": {"path": "/srv/backups"},
+        "settings": {
+            "host": "sftp.internal",
+            "port": "2222",
+            "username": "backup",
+            "password": "secret",
+        },
     }
     resp = client.post("/rclone/remotes", json=payload)
     assert resp.status_code == 201
     assert resp.get_json() == {"status": "ok"}
-    cmd = recorded["cmd"]
-    assert "sftp" in cmd
-    assert "host" in cmd and cmd[cmd.index("host") + 1] == "sftp.internal"
-    assert "user" in cmd and cmd[cmd.index("user") + 1] == "backup"
-    assert "pass" in cmd and cmd[cmd.index("pass") + 1] == "secret"
-    assert "path" in cmd and cmd[cmd.index("path") + 1] == "/srv/backups"
+    assert len(calls) == 3
+    create_cmd = calls[0]["cmd"]
+    assert create_cmd[0] == "rclone"
+    assert "--non-interactive" in create_cmd
+    assert "sftp" in create_cmd
+    assert "host" in create_cmd and create_cmd[create_cmd.index("host") + 1] == "sftp.internal"
+    assert "user" in create_cmd and create_cmd[create_cmd.index("user") + 1] == "backup"
+    assert "pass" in create_cmd and create_cmd[create_cmd.index("pass") + 1] == "secret"
+    assert "port" in create_cmd and create_cmd[create_cmd.index("port") + 1] == "2222"
+    lsd_cmd = calls[1]["cmd"]
+    assert lsd_cmd[-2:] == ["lsd", "sftp1:"]
+    mkdir_cmd = calls[2]["cmd"]
+    assert mkdir_cmd[-2:] == ["mkdir", "sftp1:sftp1"]
 
 
 def test_create_sftp_remote_missing_credentials(monkeypatch):
-    app, _ = make_app(
-        monkeypatch,
-        RCLONE_SFTP_DIRECTORIES="Backups|/srv/backups",
-        RCLONE_SFTP_HOST="sftp.internal",
-        RCLONE_SFTP_USER="backup",
-    )
+    app, app_module = make_app(monkeypatch)
+    called = False
+
+    def fake_run(cmd, **kwargs):
+        nonlocal called
+        called = True
+        return SimpleNamespace(stdout="", stderr="")
+
+    monkeypatch.setattr(app_module.subprocess, "run", fake_run)
     client = app.test_client()
     login(client)
     payload = {
         "name": "sftp2",
         "type": "sftp",
-        "settings": {"path": "/srv/backups"},
+        "settings": {
+            "host": "sftp.internal",
+            "username": "backup",
+        },
     }
     resp = client.post("/rclone/remotes", json=payload)
-    assert resp.status_code == 500
-    assert resp.get_json() == {"error": "sftp credentials are not configured"}
+    assert resp.status_code == 400
+    assert resp.get_json() == {"error": "password is required"}
+    assert called is False
+
+
+def test_create_sftp_remote_invalid_port(monkeypatch):
+    app, app_module = make_app(monkeypatch)
+    called = False
+
+    def fake_run(cmd, **kwargs):
+        nonlocal called
+        called = True
+        return SimpleNamespace(stdout="", stderr="")
+
+    monkeypatch.setattr(app_module.subprocess, "run", fake_run)
+    client = app.test_client()
+    login(client)
+    payload = {
+        "name": "sftp3",
+        "type": "sftp",
+        "settings": {
+            "host": "sftp.internal",
+            "username": "backup",
+            "password": "secret",
+            "port": "invalid",
+        },
+    }
+    resp = client.post("/rclone/remotes", json=payload)
+    assert resp.status_code == 400
+    assert resp.get_json() == {"error": "invalid port"}
+    assert called is False
+
+
+def test_create_sftp_remote_connection_failure(monkeypatch):
+    app, app_module = make_app(monkeypatch)
+    calls: list[list[str]] = []
+
+    def fake_run(cmd, **kwargs):
+        calls.append(cmd)
+        if "config" in cmd and "create" in cmd:
+            return SimpleNamespace(stdout="", stderr="")
+        if cmd[-2:] == ["lsd", "sftp1:"]:
+            raise subprocess.CalledProcessError(1, cmd, stderr="auth failed")
+        return SimpleNamespace(stdout="", stderr="")
+
+    monkeypatch.setattr(app_module.subprocess, "run", fake_run)
+    client = app.test_client()
+    login(client)
+    payload = {
+        "name": "sftp1",
+        "type": "sftp",
+        "settings": {
+            "host": "sftp.internal",
+            "username": "backup",
+            "password": "secret",
+        },
+    }
+    resp = client.post("/rclone/remotes", json=payload)
+    assert resp.status_code == 400
+    assert resp.get_json() == {"error": "auth failed"}
+    # Ensure cleanup attempted after failure
+    assert any(cmd[-3:-1] == ["config", "delete"] for cmd in calls)

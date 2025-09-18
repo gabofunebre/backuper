@@ -45,7 +45,7 @@ funcionalidades ofrece cada sección.
 
 3. Los remotes existentes se listan en **Rclone → Remotes**, donde se puede
    comprobar que hayan quedado registrados correctamente.
-   - Para `sftp`, el contenedor puede alcanzar al host mediante `host.docker.internal` y se puede especificar el puerto `222` u otro durante la configuración.
+   - Para `sftp`, ingresá host, puerto (opcional), usuario y contraseña. El contenedor puede alcanzar al host mediante `host.docker.internal` y el orquestador probará la conexión antes de crear una carpeta con el nombre del remote en el servidor.
 
 ## 4. Visor de logs
 - El enlace **Logs** muestra las últimas líneas del log del orquestador.
