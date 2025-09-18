@@ -29,6 +29,12 @@ from orchestrator.services.client import _normalize_remote
 DEFAULT_RCLONE_CONFIG = "/config/rclone/rclone.conf"
 
 
+class DefaultDriveRemoteError(RuntimeError):
+    """Raised when the default Google Drive remote cannot be prepared."""
+
+    pass
+
+
 def create_app() -> Flask:
     """Application factory for the backup orchestrator UI."""
     load_dotenv()
@@ -151,6 +157,65 @@ def create_app() -> Flask:
         except FileNotFoundError as exc:
             raise RuntimeError("rclone is not installed") from exc
 
+    def fetch_configured_remotes() -> list[str]:
+        """Return the list of remotes configured in rclone."""
+
+        result = run_rclone(
+            ["listremotes"], capture_output=True, text=True, check=True
+        )
+        return [r.strip().rstrip(":") for r in result.stdout.splitlines() if r.strip()]
+
+    def ensure_default_drive_remote() -> None:
+        """Ensure the default Drive remote exists and matches environment settings."""
+
+        base_remote = _normalize_remote(os.getenv("RCLONE_REMOTE", "gdrive"))
+        remote_name = base_remote.rstrip(":")
+        try:
+            configured = fetch_configured_remotes()
+        except subprocess.CalledProcessError as exc:
+            error = (exc.stderr or exc.stdout or "").strip()
+            message = (
+                error or "No se pudieron listar los remotes configurados en rclone."
+            )
+            raise DefaultDriveRemoteError(message) from exc
+        if remote_name in configured:
+            return
+        client_id = (os.getenv("RCLONE_DRIVE_CLIENT_ID") or "").strip()
+        client_secret = (os.getenv("RCLONE_DRIVE_CLIENT_SECRET") or "").strip()
+        token = (os.getenv("RCLONE_DRIVE_TOKEN") or "").strip()
+        scope = os.getenv("RCLONE_DRIVE_SCOPE", "drive")
+        if not client_id or not client_secret or not token:
+            raise DefaultDriveRemoteError(
+                "La cuenta global de Google Drive no está configurada. Revisá las "
+                "variables RCLONE_DRIVE_CLIENT_ID, RCLONE_DRIVE_CLIENT_SECRET y "
+                "RCLONE_DRIVE_TOKEN."
+            )
+        args = [
+            "config",
+            "create",
+            "--non-interactive",
+            remote_name,
+            "drive",
+            "token",
+            token,
+            "scope",
+            scope,
+            "--no-auto-auth",
+        ]
+        if client_id:
+            args.extend(["client_id", client_id])
+        if client_secret:
+            args.extend(["client_secret", client_secret])
+        try:
+            run_rclone(args, capture_output=True, text=True, check=True)
+        except subprocess.CalledProcessError as exc:
+            error = (exc.stderr or exc.stdout or "").strip()
+            message = (
+                error
+                or "No se pudo inicializar la cuenta global de Google Drive."
+            )
+            raise DefaultDriveRemoteError(message) from exc
+
     @app.get("/apps")
     @login_required
     def list_apps() -> list[dict]:
@@ -176,12 +241,9 @@ def create_app() -> Flask:
     def list_rclone_remotes() -> list[str]:
         """Return available rclone remotes."""
         try:
-            result = run_rclone(
-                ["listremotes"], capture_output=True, text=True, check=True
-            )
+            remotes = fetch_configured_remotes()
         except RuntimeError:
             return {"error": "rclone is not installed"}, 500
-        remotes = [r.strip().rstrip(":") for r in result.stdout.splitlines() if r.strip()]
         return jsonify(remotes)
 
     @app.get("/rclone/remotes/options/<remote_type>")
@@ -296,6 +358,10 @@ def create_app() -> Flask:
                 if not folder_name:
                     return {"error": "folder name is required"}, 400
                 remote_path = f"{base_remote}{folder_name}"
+                try:
+                    ensure_default_drive_remote()
+                except DefaultDriveRemoteError as exc:
+                    return {"error": str(exc)}, 500
                 pre_config_commands = [
                     ["mkdir", remote_path],
                     [
