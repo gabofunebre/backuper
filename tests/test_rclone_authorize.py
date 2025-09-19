@@ -1,4 +1,5 @@
 import os
+import json
 import sys
 import importlib
 import subprocess
@@ -147,11 +148,23 @@ def test_create_local_remote(monkeypatch, tmp_path):
         monkeypatch,
         RCLONE_LOCAL_DIRECTORIES=f"Backups|{base_dir}",
     )
-    recorded: dict[str, object] = {}
+    commands: list[list[str]] = []
+    config_entries: dict[str, dict[str, str]] = {}
 
     def fake_run(cmd, **kwargs):
-        recorded["cmd"] = cmd
-        recorded["kwargs"] = kwargs
+        commands.append(list(cmd))
+        if len(cmd) >= 5 and cmd[3] == "config" and cmd[4] == "dump":
+            return SimpleNamespace(stdout=json.dumps(config_entries), stderr="")
+        if len(cmd) >= 8 and cmd[3] == "config" and cmd[4] == "create":
+            name = cmd[6]
+            remote_type = cmd[7]
+            options: dict[str, str] = {}
+            for idx in range(8, len(cmd), 2):
+                if idx + 1 >= len(cmd):
+                    break
+                options[cmd[idx]] = cmd[idx + 1]
+            config_entries[name] = {"type": remote_type, **options}
+            return SimpleNamespace(stdout="", stderr="")
         return SimpleNamespace(stdout="", stderr="")
 
     monkeypatch.setattr(app_module.subprocess, "run", fake_run)
@@ -171,13 +184,21 @@ def test_create_local_remote(monkeypatch, tmp_path):
     assert data["route"] == str(expected_path)
     assert data["share_url"] == str(expected_path)
     assert "id" in data and isinstance(data["id"], int)
-    cmd = recorded["cmd"]
-    assert cmd[:3] == ["rclone", "--config", "/tmp/test-rclone.conf"]
-    assert "--non-interactive" in cmd
-    assert "alias" in cmd
-    alias_index = cmd.index("alias")
-    assert cmd[alias_index + 1] == "remote"
-    assert cmd[alias_index + 2] == str(expected_path)
+    create_cmd = next(
+        cmd
+        for cmd in commands
+        if len(cmd) > 8
+        and cmd[3] == "config"
+        and cmd[4] == "create"
+        and cmd[6] == "local1"
+    )
+    assert create_cmd[:3] == ["rclone", "--config", "/tmp/test-rclone.conf"]
+    assert "--non-interactive" in create_cmd
+    assert "alias" in create_cmd
+    alias_index = create_cmd.index("alias")
+    assert create_cmd[alias_index + 1] == "remote"
+    assert create_cmd[alias_index + 2] == str(expected_path)
+    assert any(cmd[3:5] == ["config", "dump"] for cmd in commands)
 
 
 def test_create_local_remote_with_quoted_directory(monkeypatch, tmp_path):
@@ -187,11 +208,23 @@ def test_create_local_remote_with_quoted_directory(monkeypatch, tmp_path):
         monkeypatch,
         RCLONE_LOCAL_DIRECTORIES=f'Backups|"{base_dir}"',
     )
-    recorded: dict[str, object] = {}
+    commands: list[list[str]] = []
+    config_entries: dict[str, dict[str, str]] = {}
 
     def fake_run(cmd, **kwargs):
-        recorded["cmd"] = cmd
-        recorded["kwargs"] = kwargs
+        commands.append(list(cmd))
+        if len(cmd) >= 5 and cmd[3] == "config" and cmd[4] == "dump":
+            return SimpleNamespace(stdout=json.dumps(config_entries), stderr="")
+        if len(cmd) >= 8 and cmd[3] == "config" and cmd[4] == "create":
+            name = cmd[6]
+            remote_type = cmd[7]
+            options: dict[str, str] = {}
+            for idx in range(8, len(cmd), 2):
+                if idx + 1 >= len(cmd):
+                    break
+                options[cmd[idx]] = cmd[idx + 1]
+            config_entries[name] = {"type": remote_type, **options}
+            return SimpleNamespace(stdout="", stderr="")
         return SimpleNamespace(stdout="", stderr="")
 
     monkeypatch.setattr(app_module.subprocess, "run", fake_run)
@@ -211,13 +244,21 @@ def test_create_local_remote_with_quoted_directory(monkeypatch, tmp_path):
     assert data["route"] == str(expected_path)
     assert data["share_url"] == str(expected_path)
     assert "id" in data and isinstance(data["id"], int)
-    cmd = recorded["cmd"]
-    assert cmd[:3] == ["rclone", "--config", "/tmp/test-rclone.conf"]
-    assert "--non-interactive" in cmd
-    assert "alias" in cmd
-    alias_index = cmd.index("alias")
-    assert cmd[alias_index + 1] == "remote"
-    assert cmd[alias_index + 2] == str(expected_path)
+    create_cmd = next(
+        cmd
+        for cmd in commands
+        if len(cmd) > 8
+        and cmd[3] == "config"
+        and cmd[4] == "create"
+        and cmd[6] == "local1"
+    )
+    assert create_cmd[:3] == ["rclone", "--config", "/tmp/test-rclone.conf"]
+    assert "--non-interactive" in create_cmd
+    assert "alias" in create_cmd
+    alias_index = create_cmd.index("alias")
+    assert create_cmd[alias_index + 1] == "remote"
+    assert create_cmd[alias_index + 2] == str(expected_path)
+    assert any(cmd[3:5] == ["config", "dump"] for cmd in commands)
 
 
 def test_create_local_remote_invalid_path(monkeypatch):
@@ -249,11 +290,24 @@ def test_create_local_remote_invalid_path(monkeypatch):
 def test_create_sftp_remote_success(monkeypatch):
     app, app_module = make_app(monkeypatch)
     calls: list[dict[str, object]] = []
+    config_entries: dict[str, dict[str, str]] = {}
 
     def fake_run(cmd, **kwargs):
         calls.append({"cmd": cmd, "kwargs": kwargs})
         if "obscure" in cmd:
             return SimpleNamespace(stdout="obscured-secret\n", stderr="")
+        if len(cmd) >= 5 and cmd[3] == "config" and cmd[4] == "dump":
+            return SimpleNamespace(stdout=json.dumps(config_entries), stderr="")
+        if len(cmd) >= 8 and cmd[3] == "config" and cmd[4] == "create":
+            name = cmd[6]
+            remote_type = cmd[7]
+            options: dict[str, str] = {}
+            for idx in range(8, len(cmd), 2):
+                if idx + 1 >= len(cmd):
+                    break
+                options[cmd[idx]] = cmd[idx + 1]
+            config_entries[name] = {"type": remote_type, **options}
+            return SimpleNamespace(stdout="", stderr="")
         return SimpleNamespace(stdout="", stderr="")
 
     monkeypatch.setattr(app_module.subprocess, "run", fake_run)
@@ -302,6 +356,7 @@ def test_create_sftp_remote_success(monkeypatch):
     assert create_cmd[path_index + 1] == "/srv/backups/sftp1"
     mkdir_cmd = next(call["cmd"] for call in calls if call["cmd"][3:] == ["mkdir", "sftp1:"])
     lsd_cmd = next(call["cmd"] for call in calls if call["cmd"][3:] == ["lsd", "sftp1:"])
+    assert any(call["cmd"][3:5] == ["config", "dump"] for call in calls)
 
 
 def test_create_sftp_remote_missing_credentials(monkeypatch):

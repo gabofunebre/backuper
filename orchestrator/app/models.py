@@ -1,6 +1,6 @@
 import datetime
 
-from sqlalchemy import Column, DateTime, Integer, String
+from sqlalchemy import Column, DateTime, Integer, String, Text
 
 from .database import Base
 
@@ -30,4 +30,5 @@ class RcloneRemote(Base):
     type = Column(String, nullable=True)
     route = Column(String, nullable=True)
     share_url = Column(String, nullable=True)
+    config = Column(Text, nullable=True)
     created_at = Column(DateTime, nullable=True, default=datetime.datetime.utcnow)
