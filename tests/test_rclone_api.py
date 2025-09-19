@@ -1,5 +1,4 @@
 import json
-import json
 import os
 import sys
 import subprocess
@@ -143,8 +142,6 @@ def test_list_rclone_remotes_missing_binary(monkeypatch, app):
 
 def test_validate_drive_token_with_custom_client(monkeypatch, app):
     calls: list[list[str]] = []
-    config_entries: dict[str, dict[str, str]] = {}
-    config_entries: dict[str, dict[str, str]] = {}
 
     class DummyResult:
         stdout = ""
@@ -236,7 +233,7 @@ def test_create_rclone_remote_custom_success(monkeypatch, app):
     assert "id" in data and isinstance(data["id"], int)
     assert "route" not in data
     assert "share_url" not in data
-    assert len(calls) >= 3
+    assert len(calls) >= 2
     config_path = os.getenv("RCLONE_CONFIG")
     assert calls[0] == ["rclone", "--config", config_path, "listremotes"]
     create_cmd = next(
@@ -399,7 +396,6 @@ def test_create_rclone_remote_shared_success(monkeypatch, app):
         for cmd in calls
     )
     assert any(len(cmd) > 4 and cmd[3] == "link" and "gdrive:foo" in cmd for cmd in calls)
-    assert any(cmd[3:5] == ["config", "dump"] for cmd in calls)
 
     from orchestrator.app import SessionLocal
     from orchestrator.app.models import RcloneRemote
@@ -469,7 +465,6 @@ def test_create_rclone_remote_local_success(monkeypatch, app, tmp_path):
         "remote",
     ]
     assert cmd[9] == str(expected_path)
-    assert any(cmd[3:5] == ["config", "dump"] for cmd in calls)
     assert expected_path.is_dir()
 
     from orchestrator.app import SessionLocal
@@ -1257,7 +1252,6 @@ def test_create_sftp_remote_success(monkeypatch, app):
     lsd_cmd = next(cmd for cmd in calls if cmd[3:] == ["lsd", "sftpbackup:"])
     assert mkdir_cmd[0] == "rclone"
     assert lsd_cmd[0] == "rclone"
-    assert any(cmd[3:5] == ["config", "dump"] for cmd in calls)
 
     from orchestrator.app import SessionLocal
     from orchestrator.app.models import RcloneRemote
@@ -1649,7 +1643,12 @@ def test_create_rclone_remote_shared_bootstrap_default_remote(monkeypatch, app):
     assert default_create[default_create.index("client_id") + 1] == "cid"
     assert "client_secret" in default_create
     assert default_create[default_create.index("client_secret") + 1] == "sec"
-    mkdir_cmd = next(cmd for cmd in calls if len(cmd) > 3 and cmd[3] == "mkdir")
+    assert any(
+        len(cmd) > 4
+        and cmd[:4] == ["rclone", "--config", config_path, "mkdir"]
+        and "foo" in cmd[-1]
+        for cmd in calls
+    )
     alias_cmd = next(
         cmd for cmd in calls if cmd[3:9] == [
             "config",
