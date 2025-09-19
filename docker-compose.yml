@@ -6,11 +6,10 @@ services:
       - .env
     environment:
       DATABASE_URL: "${DATABASE_URL:-sqlite:////datosPersistentes/db/apps.db}"
-      RCLONE_LOCAL_DIRECTORIES: "${RCLONE_LOCAL_DIRECTORIES:-/datosPersistentes/backups}"
     volumes:
       - ./datosPersistentes/rcloneConfig:/config/rclone
-      - ./datosPersistentes/db:/datosPersistentes/db
-      ${RCLONE_LOCAL_DIRECTORIES_VOLUME_MOUNTS:-      - ${RCLONE_LOCAL_DIRECTORIES:-./datosPersistentes/backups/}:${RCLONE_LOCAL_DIRECTORIES:-/datosPersistentes/backups}}
+      - ./datosPersistentes/db:/sqlite/db
+      - ./datosPersistentes/backups:/backupsLocales
     networks:
       - backups_net
       - Backuper_tunn_net
