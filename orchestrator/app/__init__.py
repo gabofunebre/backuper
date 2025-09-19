@@ -68,6 +68,8 @@ def create_app() -> Flask:
             conn.execute(text("ALTER TABLE rclone_remotes ADD COLUMN route VARCHAR"))
         if "share_url" not in remote_columns:
             conn.execute(text("ALTER TABLE rclone_remotes ADD COLUMN share_url VARCHAR"))
+        if "config" not in remote_columns:
+            conn.execute(text("ALTER TABLE rclone_remotes ADD COLUMN config TEXT"))
         if "created_at" not in remote_columns:
             conn.execute(text("ALTER TABLE rclone_remotes ADD COLUMN created_at DATETIME"))
     start_scheduler()
@@ -909,6 +911,34 @@ def create_app() -> Flask:
         )
         return [r.strip().rstrip(":") for r in result.stdout.splitlines() if r.strip()]
 
+    def restore_persisted_remotes() -> None:
+        """Ensure stored remotes exist in the local rclone configuration."""
+
+        try:
+            configured = set(fetch_configured_remotes())
+        except RuntimeError:
+            return
+
+        with SessionLocal() as db:
+            for remote in db.query(RcloneRemote).all():
+                name = (remote.name or "").strip()
+                if not name or name in configured:
+                    continue
+                raw_config = (remote.config or "").strip()
+                if not raw_config:
+                    continue
+                try:
+                    config_payload = json.loads(raw_config)
+                except json.JSONDecodeError:
+                    continue
+                if not isinstance(config_payload, dict):
+                    continue
+                try:
+                    _apply_remote_configuration(name, config_payload)
+                except (RemoteOperationError, RuntimeError, subprocess.CalledProcessError):
+                    continue
+                configured.add(name)
+
     def ensure_default_drive_remote() -> None:
         """Ensure the default Drive remote exists and matches environment settings."""
 
@@ -1223,6 +1253,8 @@ def create_app() -> Flask:
             return {"error": str(exc)}, 500
 
         local_created_path: str | None = None
+        config_payload: str | None = None
+        remote_created = False
         try:
             local_target_path = getattr(plan, "local_target_path", None)
             local_source_path = getattr(plan, "local_source_path", None)
@@ -1233,11 +1265,23 @@ def create_app() -> Flask:
                     return {"error": _format_local_error("crear", local_target_path, exc)}, 400
                 local_created_path = local_target_path
             share_url = _execute_remote_plan(name, plan)
+            remote_created = True
+            remote_config = _load_remote_configuration(name)
+            if not remote_config:
+                raise RemoteOperationError(
+                    "No se pudo guardar la configuración del remote.",
+                    500,
+                )
+            config_payload = json.dumps(remote_config, ensure_ascii=False)
         except RemoteOperationError as exc:
+            if remote_created:
+                _delete_remote_safely(name)
             if local_created_path:
                 shutil.rmtree(local_created_path, ignore_errors=True)
             return {"error": str(exc)}, exc.status_code
         except RuntimeError:
+            if remote_created:
+                _delete_remote_safely(name)
             if local_created_path:
                 shutil.rmtree(local_created_path, ignore_errors=True)
             return {"error": "rclone is not installed"}, 500
@@ -1255,6 +1299,7 @@ def create_app() -> Flask:
                 type=remote_type,
                 route=(route_value or None),
                 share_url=(share_url or None),
+                config=config_payload,
                 created_at=datetime.datetime.utcnow(),
             )
             db.add(new_remote)
@@ -1535,8 +1580,16 @@ def create_app() -> Flask:
             return {"error": message}, 400
 
         share_url: str | None = None
+        config_payload: str | None = None
         try:
             share_url = _execute_remote_plan(target_name, plan)
+            remote_config = _load_remote_configuration(target_name)
+            if not remote_config:
+                raise RemoteOperationError(
+                    "No se pudo guardar la configuración del remote.",
+                    500,
+                )
+            config_payload = json.dumps(remote_config, ensure_ascii=False)
         except RemoteOperationError as exc:
             revert_errors = _rollback_local_changes(
                 move_mode,
@@ -1614,6 +1667,7 @@ def create_app() -> Flask:
                 existing.type = remote_type
                 existing.route = route_value
                 existing.share_url = share_url
+                existing.config = config_payload
             else:
                 db.add(
                     RcloneRemote(
@@ -1621,6 +1675,7 @@ def create_app() -> Flask:
                         type=remote_type,
                         route=(route_value or None),
                         share_url=(share_url or None),
+                        config=config_payload,
                         created_at=datetime.datetime.utcnow(),
                     )
                 )
@@ -1915,6 +1970,9 @@ def create_app() -> Flask:
     def run_app_backup(app_id: int):
         run_backup(app_id)
         return {"status": "started"}, 202
+
+    app.restore_persisted_remotes = restore_persisted_remotes  # type: ignore[attr-defined]
+    restore_persisted_remotes()
 
     return app
 
