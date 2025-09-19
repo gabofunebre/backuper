@@ -994,6 +994,8 @@ def test_create_rclone_remote_shared_share_failure(monkeypatch, app):
         if cmd[-1] == "listremotes":
             return DummyResult(stdout="gdrive:\n")
         if len(cmd) > 3 and cmd[3] == "lsf":
+            assert "--dir-only" not in cmd
+            assert any(flag in cmd for flag in ("--dirs-only", "--files-only"))
             return DummyResult(stdout="")
         if "mkdir" in cmd:
             return DummyResult()
@@ -1029,6 +1031,8 @@ def test_create_rclone_remote_shared_missing_share_url(monkeypatch, app):
         if cmd[-1] == "listremotes":
             return DummyResult(stdout="gdrive:\n")
         if len(cmd) > 3 and cmd[3] == "lsf":
+            assert "--dir-only" not in cmd
+            assert any(flag in cmd for flag in ("--dirs-only", "--files-only"))
             return DummyResult(stdout="")
         if "mkdir" in cmd:
             return DummyResult()
