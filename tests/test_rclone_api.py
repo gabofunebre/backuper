@@ -582,6 +582,8 @@ def test_browse_sftp_directories_success(monkeypatch, app):
 
     def fake_run(cmd, capture_output, text, check):
         calls.append(cmd)
+        if "obscure" in cmd:
+            return DummyResult("obscured-pass\n")
         if "lsjson" in cmd:
             return DummyResult('[{"Name": "backups"}, {"Name": "logs"}]')
         return DummyResult()
@@ -601,14 +603,17 @@ def test_browse_sftp_directories_success(monkeypatch, app):
         {"name": "backups", "path": "/backups"},
         {"name": "logs", "path": "/logs"},
     ]
-    assert len(calls) == 2
-    config_cmd, lsjson_cmd = calls
+    assert len(calls) == 3
+    obscure_cmd, config_cmd, lsjson_cmd = calls
+    assert obscure_cmd[0] == "rclone"
+    assert "obscure" in obscure_cmd
+    assert obscure_cmd[-1] == "pass"
     assert config_cmd[0] == "rclone"
     assert config_cmd[3:7] == ["config", "create", "--non-interactive", "__probe__"]
     assert "sftp" in config_cmd
     assert config_cmd[config_cmd.index("host") + 1] == "example.com"
     assert config_cmd[config_cmd.index("user") + 1] == "user"
-    assert config_cmd[config_cmd.index("pass") + 1] == "pass"
+    assert config_cmd[config_cmd.index("pass") + 1] == "obscured-pass"
     assert lsjson_cmd[0] == "rclone"
     assert lsjson_cmd[3] == "lsjson"
     assert lsjson_cmd[4] == "__probe__:"
@@ -617,10 +622,13 @@ def test_browse_sftp_directories_success(monkeypatch, app):
 
 def test_browse_sftp_directories_permission_error(monkeypatch, app):
     class DummyResult:
-        stdout = ""
-        stderr = ""
+        def __init__(self, stdout: str = "", stderr: str = ""):
+            self.stdout = stdout
+            self.stderr = stderr
 
     def fake_run(cmd, capture_output, text, check):
+        if "obscure" in cmd:
+            return DummyResult(stdout="obscured-pass\n")
         if "lsjson" in cmd:
             raise subprocess.CalledProcessError(1, cmd, stderr="permission denied")
         return DummyResult()
@@ -659,11 +667,14 @@ def test_create_sftp_remote_success(monkeypatch, app):
     calls: list[list[str]] = []
 
     class DummyResult:
-        stdout = ""
-        stderr = ""
+        def __init__(self, stdout: str = ""):
+            self.stdout = stdout
+            self.stderr = ""
 
     def fake_run(cmd, capture_output, text, check):
         calls.append(cmd)
+        if "obscure" in cmd:
+            return DummyResult("obscured-pass\n")
         return DummyResult()
 
     monkeypatch.setattr(subprocess, "run", fake_run)
@@ -688,11 +699,15 @@ def test_create_sftp_remote_success(monkeypatch, app):
         "route": "/data",
         "share_url": "/data",
     }
-    assert len(calls) == 3
-    config_cmd, mkdir_cmd, lsd_cmd = calls
+    assert len(calls) == 4
+    obscure_cmd, config_cmd, mkdir_cmd, lsd_cmd = calls
+    assert obscure_cmd[0] == "rclone"
+    assert "obscure" in obscure_cmd
+    assert obscure_cmd[-1] == "pass"
     assert config_cmd[3:7] == ["config", "create", "--non-interactive", "sftpbackup"]
     path_index = config_cmd.index("path")
     assert config_cmd[path_index + 1] == "/data/sftpbackup"
+    assert config_cmd[config_cmd.index("pass") + 1] == "obscured-pass"
     assert mkdir_cmd[3:] == ["mkdir", "sftpbackup:"]
     assert lsd_cmd[3:] == ["lsd", "sftpbackup:"]
 
@@ -701,11 +716,14 @@ def test_create_sftp_remote_permission_error(monkeypatch, app):
     calls: list[list[str]] = []
 
     class DummyResult:
-        stdout = ""
-        stderr = ""
+        def __init__(self, stdout: str = ""):
+            self.stdout = stdout
+            self.stderr = ""
 
     def fake_run(cmd, capture_output, text, check):
         calls.append(cmd)
+        if "obscure" in cmd:
+            return DummyResult("obscured-pass\n")
         if "mkdir" in cmd:
             raise subprocess.CalledProcessError(1, cmd, stderr="permission denied")
         return DummyResult()
@@ -730,7 +748,7 @@ def test_create_sftp_remote_permission_error(monkeypatch, app):
     assert resp.get_json() == {
         "error": "El usuario SFTP no tiene permisos suficientes en esa carpeta. Probá con otra ubicación o ajustá los permisos en el servidor.",
     }
-    assert len(calls) == 3
+    assert len(calls) == 4
     config_path = os.getenv("RCLONE_CONFIG")
     delete_cmd = calls[-1]
     assert delete_cmd[:4] == ["rclone", "--config", config_path, "config"]
