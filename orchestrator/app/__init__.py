@@ -237,7 +237,7 @@ def create_app() -> Flask:
     def _collect_drive_root_entries(remote: str) -> set[str]:
         entries: set[str] = set()
         base_args = ["lsf", remote, "--max-depth", "1"]
-        for flag in ("--dir-only", "--files-only"):
+        for flag in ("--dirs-only", "--files-only"):
             try:
                 result = run_rclone(
                     [*base_args, flag], capture_output=True, text=True, check=True
