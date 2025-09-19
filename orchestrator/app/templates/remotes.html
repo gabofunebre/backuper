@@ -2,35 +2,13 @@
 
 {% block content %}
 <div class="container py-4">
-  <div class="row g-4">
-    <div class="col-12 col-lg-6">
-      <h1 class="mb-3">Rclone Remotes</h1>
-      <p class="text-muted">Visualizá y administrá los remotes configurados en tu instancia de rclone.</p>
-      <div class="table-responsive">
-        <table class="table table-striped align-middle" id="remotes-table">
-          <thead>
-            <tr>
-              <th scope="col">Nombre</th>
-            </tr>
-          </thead>
-          <tbody></tbody>
-        </table>
-      </div>
-      <div class="alert alert-info mt-3 d-none" id="remotes-empty" role="alert">
-        Todavía no hay remotes configurados. Creá uno con el formulario de la derecha.
-      </div>
-    </div>
-    <div class="col-12 col-lg-6">
-      <div class="card shadow-sm">
-        <div class="card-body">
-          <h2 class="h5">Crear un nuevo remote</h2>
-          <p class="text-muted">Completá el formulario para crear un remote mediante <code>rclone config create</code> sin salir de la UI.</p>
-          <div class="mt-3">
-            {% include 'partials/remote_form.html' %}
-          </div>
-        </div>
-      </div>
-    </div>
-  </div>
+  <h1 class="mb-3">Rclone Remotes</h1>
+  <p class="text-muted">
+    Visualizá y administrá los remotes configurados en tu instancia de rclone.
+  </p>
+  <p class="text-muted small">
+    Para crear un nuevo remote, usá la opción <strong>Configurar</strong> del menú Rclone.
+  </p>
+  {% include 'partials/remotes_table.html' %}
 </div>
 {% endblock %}
