@@ -26,6 +26,7 @@ Orquestador liviano que:
 backup-orchestrator/
 ├─ docker-compose.yml
 ├─ .env                # variables del orquestador
+├─ rcloneConfig/       # configuración persistente de rclone
 └─ orchestrator/
    ├─ Dockerfile       # imagen con app + rclone
    └─ app/            # código del orquestador (UI + scheduler + runner)
@@ -47,35 +48,59 @@ BACKUP_MAX_SIZE_MB=20480
 
 # rclone
 RCLONE_REMOTE=gdrive
+RCLONE_DRIVE_CLIENT_ID=tu-client-id.apps.googleusercontent.com
+RCLONE_DRIVE_CLIENT_SECRET=tu-client-secret
+RCLONE_DRIVE_TOKEN={"access_token": "...", "refresh_token": "..."}
+# Opcional: ajustá el scope y los permisos de compartición
+# RCLONE_DRIVE_SCOPE=drive
+# RCLONE_DRIVE_SHARE_TYPE=user
+# RCLONE_DRIVE_SHARE_ROLE=organizer
 # Remote por defecto si la app no especifica uno propio
 # Cada app elige su carpeta destino; el orquestador guarda el folderId por app
 ```
 
-> El **remote** `gdrive` se configura una sola vez y vive en el volumen `rclone_config`.
+> El **remote** `gdrive` se configura una sola vez y vive en `./rcloneConfig` (montado en `/config/rclone` dentro del contenedor).
+> Como es un bind mount del host, Docker no lo recrea ni lo pisa cuando corrés `docker compose down` seguido de `docker compose up`: la carpeta y el archivo `rclone.conf` quedan en tu disco.
 
 ## 4) Primer arranque
+El `docker-compose` monta `./rcloneConfig` dentro del contenedor para conservar la configuración de rclone entre reinicios. La carpeta se crea automáticamente al levantar los servicios (o podés crearla manualmente con `mkdir -p rcloneConfig`). Mientras no borres esa carpeta en el host (o elimines su contenido), cualquier recreación del contenedor volverá a usar exactamente la misma configuración.
 ```bash
 docker compose up -d --build
 ```
 Abrí `http://localhost:5550` (o tu host:5550).
 
 ## 5) Configurar Google Drive (rclone)
-Dentro del contenedor (una sola vez):
-```bash
-docker exec -it backup-orchestrator rclone config
-```
-- Crear remote `gdrive` (tipo **Drive**).
-- Scope recomendado: `drive.file` (o `drive` si querés listar/borrar fuera de archivos subidos).
-- Autenticá (OAuth) y verificá:
-```bash
-docker exec -it backup-orchestrator rclone lsd gdrive:
-```
+El contenedor necesita un remote de Google Drive (por defecto `gdrive`) para
+subir los respaldos. Podés inicializarlo de dos formas:
+
+- **Automática**: completá `RCLONE_DRIVE_CLIENT_ID`,
+  `RCLONE_DRIVE_CLIENT_SECRET` y `RCLONE_DRIVE_TOKEN` en tu `.env`. Al arrancar
+  la UI, el orquestador verifica si existe el remote `gdrive` y, si falta,
+  ejecuta `rclone config create` con esas credenciales. La configuración queda
+  persistida en `./rcloneConfig/rclone.conf` gracias al volumen bind mount.
+- **Manual**: entrá al contenedor y corré el asistente de rclone una sola vez:
+  ```bash
+  docker exec -it backup-orchestrator rclone config
+  ```
+  - Creá el remote `gdrive` (tipo **Drive**).
+  - Scope recomendado: `drive.file` (o `drive` si querés listar/borrar fuera de archivos subidos).
+  - Autenticá (OAuth) y verificá:
+    ```bash
+    docker exec -it backup-orchestrator rclone lsd gdrive:
+    ```
 
 ## 6) Configurar rclone desde la UI
 Si preferís evitar la consola, la interfaz web incluye una sección para inicializar y ver los remotes de rclone.
 - Ingresá a **Rclone → Configurar** desde la UI.
-- Allí se ejecuta el asistente `rclone config` y podés listar los remotes disponibles (`/rclone/remotes`).
-- La configuración se guarda en el volumen `rclone_config`.
+- El formulario crea "perfiles" listos para usar desde las apps:
+  - Para **Google Drive**, la opción predeterminada "Usar la cuenta provista por el orquestador" crea una carpeta dentro del
+    remote global (`RCLONE_REMOTE`, por defecto `gdrive`), la comparte con el correo que indiques y genera un alias
+    `rclone config create <nombre> alias remote gdrive:<carpeta>`. Así cada perfil apunta a una carpeta dedicada sin pedir
+    credenciales nuevas.
+  - También podés elegir "Usar mi propia cuenta" y pegar un token OAuth si necesitás operar con otra cuenta de Drive.
+  - Para **local** se muestran las carpetas habilitadas mediante `RCLONE_LOCAL_DIRECTORIES`.
+  - Para **SFTP** se crea la carpeta objetivo dentro del servidor remoto y se valida la conexión antes de guardar.
+- La configuración se guarda en `./rcloneConfig`, por lo que no se pierde al reiniciar el contenedor.
 
 ## 7) Contrato v1 para las Apps
 Cada app que quiera respaldo debe conectarse a `backups_net` y exponer los
