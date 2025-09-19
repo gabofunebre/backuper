@@ -6,6 +6,22 @@ const sftpState = {
   parentPath: '/',
 };
 
+function toggleRemoteOverlay(show, message = 'Procesando…') {
+  const overlay = document.getElementById('remote-loading-overlay');
+  const text = document.getElementById('remote-loading-text');
+  if (!overlay) {
+    return;
+  }
+  if (show) {
+    if (text) {
+      text.textContent = message;
+    }
+    overlay.classList.remove('d-none');
+  } else {
+    overlay.classList.add('d-none');
+  }
+}
+
 function normalizeSftpPath(path) {
   if (!path) return '/';
   let value = path.trim();
@@ -281,7 +297,8 @@ async function loadRemotes() {
       window.location.href = '/login';
       return;
     }
-    const remotes = await resp.json();
+    const payload = await resp.json();
+    const remotes = Array.isArray(payload) ? payload : [];
     const tbody = document.querySelector('#remotes-table tbody');
     const emptyMessage = document.getElementById('remotes-empty');
     if (tbody) {
@@ -298,13 +315,32 @@ async function loadRemotes() {
         emptyMessage.classList.add('d-none');
       }
     }
-    remotes.forEach((name) => {
+    remotes.forEach((entry) => {
+      const remote = typeof entry === 'string' ? { name: entry } : entry || {};
+      const name = remote.name || '';
+      const shareUrl = remote.share_url || '';
       if (tbody) {
         const tr = document.createElement('tr');
-        tr.innerHTML = `<td>${name}</td>`;
+        const nameCell = document.createElement('td');
+        nameCell.textContent = name;
+        tr.appendChild(nameCell);
+        const linkCell = document.createElement('td');
+        if (shareUrl) {
+          const anchor = document.createElement('a');
+          anchor.href = shareUrl;
+          anchor.target = '_blank';
+          anchor.rel = 'noopener';
+          anchor.textContent = shareUrl;
+          anchor.classList.add('text-break');
+          linkCell.appendChild(anchor);
+        } else {
+          linkCell.textContent = '—';
+          linkCell.classList.add('text-muted');
+        }
+        tr.appendChild(linkCell);
         tbody.appendChild(tr);
       }
-      if (select) {
+      if (select && name) {
         const opt = document.createElement('option');
         opt.value = name;
         opt.textContent = name;
@@ -316,7 +352,7 @@ async function loadRemotes() {
   }
 }
 
-function showFeedback(message, type = 'info') {
+function showFeedback(message, type = 'info', options = {}) {
   const feedback = document.getElementById('remote-feedback');
   if (!feedback) return;
   const baseClass = 'alert mt-4';
@@ -326,7 +362,17 @@ function showFeedback(message, type = 'info') {
     return;
   }
   feedback.className = `${baseClass} alert-${type}`;
-  feedback.textContent = message;
+  feedback.textContent = '';
+  feedback.appendChild(document.createTextNode(message));
+  if (options.link) {
+    const link = document.createElement('a');
+    link.href = options.link;
+    link.target = '_blank';
+    link.rel = 'noopener';
+    link.classList.add('d-block', 'mt-2', 'text-break');
+    link.textContent = options.link;
+    feedback.appendChild(link);
+  }
 }
 
 function updateDriveFeedback(message, variant = 'muted') {
@@ -566,6 +612,7 @@ function initRemoteForm() {
     }
 
     const payload = { name, type, settings: {} };
+    let overlayMessage = 'Guardando remote…';
     if (type === 'local') {
       const select = document.getElementById('local_path');
       const value = select ? select.value : '';
@@ -607,22 +654,12 @@ function initRemoteForm() {
         return;
       }
       payload.settings.base_path = basePath;
-  } else if (type === 'drive') {
-    const mode = getDriveMode();
+    } else if (type === 'drive') {
+      const mode = getDriveMode();
       payload.settings.mode = mode;
       if (mode === 'shared') {
-        const emailInput = document.getElementById('drive_email');
-        const email = emailInput ? emailInput.value.trim() : '';
-        const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-        if (!email) {
-          showFeedback('Ingresá el correo de Google con el que querés compartir la carpeta.', 'danger');
-          return;
-        }
-        if (!emailRegex.test(email)) {
-          showFeedback('El correo ingresado no tiene un formato válido.', 'danger');
-          return;
-        }
-        payload.settings.email = email;
+        payload.settings.folder_name = name;
+        overlayMessage = 'Creando carpeta y generando enlace en Google Drive…';
       } else {
         const token = document.getElementById('drive_token')?.value.trim() || '';
         if (!token) {
@@ -659,6 +696,7 @@ function initRemoteForm() {
     if (submitBtn) {
       submitBtn.disabled = true;
     }
+    toggleRemoteOverlay(true, overlayMessage);
     try {
       const resp = await fetch('/rclone/remotes', {
         method: 'POST',
@@ -677,7 +715,13 @@ function initRemoteForm() {
         updateDriveFeedback('', 'muted');
         delete directoryCache.local;
         resetSftpBrowser(true);
-        showFeedback('Remote guardado correctamente.', 'success');
+        const feedbackOptions = {};
+        let successMessage = 'Remote guardado correctamente.';
+        if (data && typeof data.share_url === 'string' && data.share_url.trim()) {
+          feedbackOptions.link = data.share_url.trim();
+          successMessage = 'Remote guardado correctamente. Compartí este enlace:';
+        }
+        showFeedback(successMessage, 'success', feedbackOptions);
         loadRemotes();
       } else {
         const message = data && data.error ? data.error : 'No se pudo crear el remote';
@@ -689,6 +733,7 @@ function initRemoteForm() {
       if (submitBtn) {
         submitBtn.disabled = false;
       }
+      toggleRemoteOverlay(false);
     }
   });
 }

@@ -19,7 +19,7 @@ from sqlalchemy import inspect, text
 from apscheduler.triggers.cron import CronTrigger
 
 from .database import Base, SessionLocal, engine
-from .models import App
+from .models import App, RcloneRemote
 from orchestrator.scheduler import (
     start as start_scheduler,
     schedule_app_backups,
@@ -33,6 +33,12 @@ DEFAULT_RCLONE_CONFIG = "/config/rclone/rclone.conf"
 
 class DefaultDriveRemoteError(RuntimeError):
     """Raised when the default Google Drive remote cannot be prepared."""
+
+    pass
+
+
+class DriveShareLinkError(Exception):
+    """Raised when a public Google Drive link cannot be generated."""
 
     pass
 
@@ -218,6 +224,41 @@ def create_app() -> Flask:
                 return subprocess.run(cleaned_cmd, **kwargs)
             raise
 
+    def _generate_drive_share_link(target: str) -> str:
+        """Create or fetch a public sharing link for *target* in Google Drive."""
+
+        commands = [["link", target, "--create-link"], ["link", target]]
+        last_error: subprocess.CalledProcessError | None = None
+        for command in commands:
+            try:
+                result = run_rclone(
+                    command, capture_output=True, text=True, check=True
+                )
+            except subprocess.CalledProcessError as exc:
+                error_text = (exc.stderr or exc.stdout or "").lower()
+                if "--create-link" in command and "unknown flag" in error_text:
+                    last_error = exc
+                    continue
+                raise DriveShareLinkError(
+                    (exc.stderr or exc.stdout or "").strip()
+                    or "No se pudo generar el enlace compartido de Google Drive."
+                ) from exc
+            output_lines = [
+                line.strip()
+                for line in (result.stdout or "").splitlines()
+                if line.strip()
+            ]
+            if output_lines:
+                return output_lines[0]
+        if last_error is not None:
+            raise DriveShareLinkError(
+                (last_error.stderr or last_error.stdout or "").strip()
+                or "No se pudo generar el enlace compartido de Google Drive."
+            ) from last_error
+        raise DriveShareLinkError(
+            "No se pudo generar el enlace compartido de Google Drive."
+        )
+
     def fetch_configured_remotes() -> list[str]:
         """Return the list of remotes configured in rclone."""
 
@@ -299,13 +340,28 @@ def create_app() -> Flask:
 
     @app.get("/rclone/remotes")
     @login_required
-    def list_rclone_remotes() -> list[str]:
-        """Return available rclone remotes."""
+    def list_rclone_remotes() -> list[dict]:
+        """Return available rclone remotes with stored metadata."""
+
         try:
             remotes = fetch_configured_remotes()
         except RuntimeError:
             return {"error": "rclone is not installed"}, 500
-        return jsonify(remotes)
+
+        with SessionLocal() as db:
+            stored = {remote.name: remote for remote in db.query(RcloneRemote).all()}
+
+        entries: list[dict[str, str]] = []
+        for remote_name in remotes:
+            item: dict[str, str] = {"name": remote_name}
+            stored_remote = stored.get(remote_name)
+            if stored_remote:
+                if stored_remote.type:
+                    item["type"] = stored_remote.type
+                if stored_remote.share_url:
+                    item["share_url"] = stored_remote.share_url
+            entries.append(item)
+        return jsonify(entries)
 
     @app.get("/rclone/remotes/options/<remote_type>")
     @login_required
@@ -479,6 +535,7 @@ def create_app() -> Flask:
     @login_required
     def create_rclone_remote() -> tuple[dict, int]:
         """Create a new rclone remote."""
+
         data = request.get_json(force=True)
         if not data or not data.get("name") or not data.get("type"):
             return {"error": "invalid payload"}, 400
@@ -489,6 +546,7 @@ def create_app() -> Flask:
         name = (data.get("name") or "").strip()
         if not name:
             return {"error": "invalid payload"}, 400
+
         settings = data.get("settings") or {}
         base_args = ["config", "create", "--non-interactive", name]
         args: list[str]
@@ -496,8 +554,13 @@ def create_app() -> Flask:
         post_config_commands: list[list[str]] = []
         cleanup_remote_on_error = False
         error_translator = None
+        share_url: str | None = None
+        drive_mode: str | None = None
+        drive_remote_path: str | None = None
+
         if remote_type == "onedrive":
             return {"error": "OneDrive aún está en construcción"}, 400
+
         if remote_type == "drive":
             mode = (settings.get("mode") or "").strip().lower()
             token = (settings.get("token") or "").strip()
@@ -506,38 +569,21 @@ def create_app() -> Flask:
             if mode not in {"shared", "custom"}:
                 return {"error": "invalid drive mode"}, 400
             if mode == "shared":
-                email = (settings.get("email") or "").strip()
-                if not email:
-                    return {"error": "email is required"}, 400
-                if "@" not in email:
-                    return {"error": "invalid email"}, 400
                 base_remote = _normalize_remote(
                     os.getenv("RCLONE_REMOTE", "gdrive")
                 )
                 folder_name = (settings.get("folder_name") or name or "").strip()
                 if not folder_name:
                     return {"error": "folder name is required"}, 400
-                remote_path = f"{base_remote}{folder_name}"
+                drive_remote_path = f"{base_remote}{folder_name}"
                 try:
                     ensure_default_drive_remote()
                 except DefaultDriveRemoteError as exc:
                     return {"error": str(exc)}, 500
-                pre_config_commands = [
-                    ["mkdir", remote_path],
-                    [
-                        "backend",
-                        "command",
-                        remote_path,
-                        "share",
-                        "--share-with",
-                        email,
-                        "--type",
-                        os.getenv("RCLONE_DRIVE_SHARE_TYPE", "user"),
-                        "--role",
-                        os.getenv("RCLONE_DRIVE_SHARE_ROLE", "writer"),
-                    ],
-                ]
-                args = base_args + ["alias", "remote", remote_path]
+                pre_config_commands = [["mkdir", drive_remote_path]]
+                args = base_args + ["alias", "remote", drive_remote_path]
+                cleanup_remote_on_error = True
+                drive_mode = "shared"
             else:
                 if not token:
                     return {"error": "token is required"}, 400
@@ -613,6 +659,7 @@ def create_app() -> Flask:
             error_translator = _translate_sftp_error
         else:
             return {"error": "unsupported remote type"}, 400
+
         try:
             for extra_args in pre_config_commands:
                 run_rclone(extra_args, capture_output=True, text=True, check=True)
@@ -635,6 +682,20 @@ def create_app() -> Flask:
                     if error_translator:
                         error = error_translator(error)
                     return {"error": error}, 400
+            if remote_type == "drive" and drive_mode == "shared" and drive_remote_path:
+                share_url = _generate_drive_share_link(drive_remote_path)
+        except DriveShareLinkError as exc:
+            if cleanup_remote_on_error:
+                try:
+                    run_rclone(
+                        ["config", "delete", name],
+                        capture_output=True,
+                        text=True,
+                        check=True,
+                    )
+                except Exception:
+                    pass
+            return {"error": str(exc)}, 500
         except RuntimeError:
             return {"error": "rclone is not installed"}, 500
         except subprocess.CalledProcessError as exc:
@@ -642,7 +703,20 @@ def create_app() -> Flask:
             if error_translator:
                 error = error_translator(error)
             return {"error": error}, 400
-        return {"status": "ok"}, 201
+
+        with SessionLocal() as db:
+            existing = db.query(RcloneRemote).filter_by(name=name).one_or_none()
+            if existing:
+                existing.type = remote_type
+                existing.share_url = share_url
+            else:
+                db.add(RcloneRemote(name=name, type=remote_type, share_url=share_url))
+            db.commit()
+
+        response = {"status": "ok"}
+        if share_url:
+            response["share_url"] = share_url
+        return response, 201
 
     @app.post("/apps")
     @login_required
