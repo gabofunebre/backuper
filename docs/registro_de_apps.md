@@ -7,7 +7,7 @@ requeridos, endpoints y buenas prácticas para preparar el contenedor de
 cada app.
 
 ## Configurar rclone desde la UI
-El orquestador permite inicializar rclone sin entrar al contenedor. En la interfaz web encontrás un apartado **Rclone** que lista los remotes (`/rclone/remotes`) y ofrece un formulario para crear nuevos perfiles. Para Google Drive, el perfil predeterminado usa el remote global (`RCLONE_REMOTE`) para crear una carpeta dedicada, compartirla con la cuenta indicada y registrar un alias (`rclone config create <nombre> alias remote gdrive:<carpeta>`).
+El orquestador permite inicializar rclone sin entrar al contenedor. En la interfaz web encontrás un apartado **Rclone** (`/rclone/config`) que ofrece un formulario para crear nuevos perfiles y, en la misma pantalla, una tabla con los remotes disponibles. Para Google Drive, el perfil predeterminado usa el remote global (`RCLONE_REMOTE`) para crear una carpeta dedicada, compartirla con la cuenta indicada y registrar un alias (`rclone config create <nombre> alias remote gdrive:<carpeta>`).
 
 ## Flujo de registro
 
