@@ -35,12 +35,18 @@ backup-orchestrator/
 ### ¿Para qué usamos el volumen `backups`?
 
 El servicio define un volumen Docker llamado `backups` que se monta dentro del
-contenedor en la ruta `/backups`. Ese espacio queda disponible para que el
-orquestador exponga carpetas locales mediante la funcionalidad **Local** de los
-remotes de rclone. Si configurás la variable `RCLONE_LOCAL_DIRECTORIES`
-(por ejemplo `RCLONE_LOCAL_DIRECTORIES=Respaldos|/backups/mi-app`), la UI
-permitirá elegir esas rutas como destino y los archivos quedarán almacenados en
-el volumen persistente del host.
+contenedor en la ruta `/backups`. Ese espacio queda disponible para compartir
+archivos temporales entre el orquestador y las apps que exportan sus datos.
+
+Además se monta la carpeta indicada por la variable `LOCAL_DIRECTORIES_ROOT`
+(por defecto `./datosPersistentes/local-directories`) en la ruta
+`/local-directories`. Allí es donde deben existir las carpetas locales que se
+exponen a través de los remotes de rclone. Configurá la variable
+`RCLONE_LOCAL_DIRECTORIES` con esas rutas (por ejemplo,
+`RCLONE_LOCAL_DIRECTORIES=Respaldos|/local-directories/mi-app`) y la UI las
+ofrecerá como destino para crear remotes de tipo **Local**. Los archivos se
+almacenarán en el bind mount del host, por lo que quedan disponibles fuera del
+contenedor.
 
 ### ¿Para qué usamos la base de datos?
 
@@ -69,6 +75,9 @@ RCLONE_REMOTE=gdrive
 RCLONE_DRIVE_CLIENT_ID=tu-client-id.apps.googleusercontent.com
 RCLONE_DRIVE_CLIENT_SECRET=tu-client-secret
 RCLONE_DRIVE_TOKEN={"access_token": "...", "refresh_token": "..."}
+# Carpetas locales disponibles en la UI (separá con `;` para múltiples entradas)
+LOCAL_DIRECTORIES_ROOT=./datosPersistentes/local-directories
+RCLONE_LOCAL_DIRECTORIES=Respaldos|/local-directories/mi-app
 # Opcional: ajustá el scope y los permisos de compartición
 # RCLONE_DRIVE_SCOPE=drive
 # RCLONE_DRIVE_SHARE_TYPE=user
@@ -76,6 +85,11 @@ RCLONE_DRIVE_TOKEN={"access_token": "...", "refresh_token": "..."}
 # Remote por defecto si la app no especifica uno propio
 # Cada app elige su carpeta destino; el orquestador guarda el folderId por app
 ```
+
+> El `docker-compose` monta automáticamente `LOCAL_DIRECTORIES_ROOT` dentro del
+> contenedor en la ruta `/local-directories`. Podés ajustar esa variable para
+> apuntarla a cualquier carpeta del host donde quieras almacenar los respaldos
+> locales.
 
 > El **remote** `gdrive` se configura una sola vez y vive en `./rcloneConfig` (montado en `/config/rclone` dentro del contenedor).
 > Como es un bind mount del host, Docker no lo recrea ni lo pisa cuando corrés `docker compose down` seguido de `docker compose up`: la carpeta y el archivo `rclone.conf` quedan en tu disco.
