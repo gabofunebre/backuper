@@ -4,14 +4,18 @@ services:
     container_name: backuper
     env_file:
       - .env
+    environment:
+      DATABASE_URL: sqlite:////data/apps.db
     volumes:
       - backups:/backups
       - ./rcloneConfig:/config/rclone
+      - orchestrator_db:/data
     networks:
       - backups_net
       - Backuper_tunn_net
 volumes:
   backups:
+  orchestrator_db:
 networks:
   backups_net:
     driver: bridge

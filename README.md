@@ -32,6 +32,28 @@ backup-orchestrator/
    └─ app/            # código del orquestador (UI + scheduler + runner)
 ```
 
+### ¿Para qué usamos el volumen `backups`?
+
+El servicio define un volumen Docker llamado `backups` que se monta dentro del
+contenedor en la ruta `/backups`. Ese espacio queda disponible para que el
+orquestador exponga carpetas locales mediante la funcionalidad **Local** de los
+remotes de rclone. Si configurás la variable `RCLONE_LOCAL_DIRECTORIES`
+(por ejemplo `RCLONE_LOCAL_DIRECTORIES=Respaldos|/backups/mi-app`), la UI
+permitirá elegir esas rutas como destino y los archivos quedarán almacenados en
+el volumen persistente del host.
+
+### ¿Para qué usamos la base de datos?
+
+El orquestador guarda su configuración en una base SQLite (o en la base que
+indique `DATABASE_URL`). Allí se almacenan las aplicaciones registradas, sus
+programaciones y también los metadatos de cada remote configurado (tipo, ruta
+de destino, enlace compartido, etc.). De esta manera, toda la información sigue
+disponible aunque el contenedor se reinicie o se vuelva a construir. Para evitar
+perder esos datos, el `docker-compose.yml` monta un volumen llamado
+`orchestrator_db` sobre `/data` dentro del contenedor y fija
+`DATABASE_URL=sqlite:////data/apps.db`, por lo que el archivo `apps.db` queda en
+un volumen persistente del host.
+
 ## 3) Variables (.env)
 Crear un archivo `.env` en la raíz:
 

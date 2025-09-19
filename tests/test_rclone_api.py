@@ -79,6 +79,7 @@ def test_list_rclone_remotes_with_metadata(monkeypatch, app):
         {
             "name": "foo",
             "type": "drive",
+            "route": "https://drive.google.com/drive/folders/demo",
             "share_url": "https://drive.google.com/drive/folders/demo",
         }
     ]
@@ -202,7 +203,7 @@ def test_create_rclone_remote_custom_success(monkeypatch, app):
         },
     )
     assert resp.status_code == 201
-    assert resp.get_json() == {"status": "ok"}
+    assert resp.get_json() == {"status": "ok", "route": None}
     cmd = calls[0]
     assert cmd[0] == "rclone"
     config_path = os.getenv("RCLONE_CONFIG")
@@ -255,7 +256,7 @@ def test_create_rclone_remote_custom_retries_without_no_auto_auth(monkeypatch, a
         },
     )
     assert resp.status_code == 201
-    assert resp.get_json() == {"status": "ok"}
+    assert resp.get_json() == {"status": "ok", "route": None}
     assert len(calls) == 2
     assert "--no-auto-auth" in calls[0]
     assert "--no-auto-auth" not in calls[1]
@@ -295,6 +296,7 @@ def test_create_rclone_remote_shared_success(monkeypatch, app):
     assert resp.status_code == 201
     assert resp.get_json() == {
         "status": "ok",
+        "route": "https://drive.google.com/drive/folders/abc123",
         "share_url": "https://drive.google.com/drive/folders/abc123",
     }
     assert len(calls) == 4
@@ -352,7 +354,11 @@ def test_create_rclone_remote_local_success(monkeypatch, app):
         },
     )
     assert resp.status_code == 201
-    assert resp.get_json() == {"status": "ok"}
+    assert resp.get_json() == {
+        "status": "ok",
+        "route": "/backups",
+        "share_url": "/backups",
+    }
     assert len(calls) == 1
     cmd = calls[0]
     config_path = os.getenv("RCLONE_CONFIG")
@@ -392,7 +398,11 @@ def test_update_rclone_remote_local_success(monkeypatch, app):
         json={"name": "foo", "type": "local", "settings": {"path": "/datos"}},
     )
     assert resp.status_code == 200
-    assert resp.get_json() == {"status": "ok"}
+    assert resp.get_json() == {
+        "status": "ok",
+        "route": "/datos",
+        "share_url": "/datos",
+    }
 
     config_path = os.getenv("RCLONE_CONFIG")
     assert commands[0] == ["rclone", "--config", config_path, "listremotes"]
@@ -427,7 +437,7 @@ def test_update_rclone_remote_local_success(monkeypatch, app):
     with SessionLocal() as db:
         stored = db.query(RcloneRemote).filter_by(name="foo").one()
         assert stored.type == "local"
-        assert stored.share_url is None
+        assert stored.share_url == "/datos"
 
 
 def test_update_rclone_remote_failure_restores_backup(monkeypatch, app):
@@ -673,7 +683,11 @@ def test_create_sftp_remote_success(monkeypatch, app):
         },
     )
     assert resp.status_code == 201
-    assert resp.get_json() == {"status": "ok", "share_url": "/data"}
+    assert resp.get_json() == {
+        "status": "ok",
+        "route": "/data",
+        "share_url": "/data",
+    }
     assert len(calls) == 3
     config_cmd, mkdir_cmd, lsd_cmd = calls
     assert config_cmd[3:7] == ["config", "create", "--non-interactive", "sftpbackup"]
@@ -752,7 +766,7 @@ def test_create_rclone_remote_nested_config_path(monkeypatch, app, tmp_path):
         },
     )
     assert resp.status_code == 201
-    assert resp.get_json() == {"status": "ok"}
+    assert resp.get_json() == {"status": "ok", "route": None}
     assert nested_config.parent.is_dir()
     cmd = calls[-1]
     assert "--config" in cmd
@@ -772,7 +786,7 @@ def test_create_rclone_remote_nested_config_path(monkeypatch, app, tmp_path):
         },
     )
     assert resp.status_code == 201
-    assert resp.get_json() == {"status": "ok"}
+    assert resp.get_json() == {"status": "ok", "route": None}
     assert default_config.parent.is_dir()
     cmd = calls[-1]
     assert "--config" in cmd
@@ -915,6 +929,7 @@ def test_create_rclone_remote_shared_bootstrap_default_remote(monkeypatch, app):
     assert resp.status_code == 201
     assert resp.get_json() == {
         "status": "ok",
+        "route": "https://drive.google.com/drive/folders/new",
         "share_url": "https://drive.google.com/drive/folders/new",
     }
     config_path = os.getenv("RCLONE_CONFIG")

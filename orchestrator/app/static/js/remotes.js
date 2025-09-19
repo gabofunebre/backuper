@@ -368,30 +368,31 @@ async function loadRemotes() {
     remotes.forEach((entry) => {
       const remote = typeof entry === 'string' ? { name: entry } : entry || {};
       const name = remote.name || '';
-      const shareUrl = remote.share_url || '';
       const remoteType = (remote.type || '').toLowerCase();
+      const route = remote.route || remote.share_url || '';
       if (tbody) {
         const tr = document.createElement('tr');
 
         const nameCell = document.createElement('td');
-        nameCell.textContent = remoteData.name;
+        nameCell.textContent = name;
         tr.appendChild(nameCell);
 
         const linkCell = document.createElement('td');
-        if (shareUrl) {
-          if (remoteType === 'sftp') {
-            const span = document.createElement('span');
-            span.textContent = shareUrl;
-            span.classList.add('text-break');
-            linkCell.appendChild(span);
-          } else {
+        if (route) {
+          const looksLikeUrl = /^https?:\/\//i.test(route);
+          if (remoteType === 'drive' && looksLikeUrl) {
             const anchor = document.createElement('a');
-            anchor.href = shareUrl;
+            anchor.href = route;
             anchor.target = '_blank';
             anchor.rel = 'noopener';
-            anchor.textContent = shareUrl;
+            anchor.textContent = route;
             anchor.classList.add('text-break');
             linkCell.appendChild(anchor);
+          } else {
+            const span = document.createElement('span');
+            span.textContent = route;
+            span.classList.add('text-break');
+            linkCell.appendChild(span);
           }
         } else {
           linkCell.textContent = '—';
@@ -406,14 +407,14 @@ async function loadRemotes() {
         editBtn.type = 'button';
         editBtn.className = 'btn btn-outline-secondary btn-sm me-2';
         editBtn.innerHTML = '<span aria-hidden="true">&#9998;</span><span class="visually-hidden">Editar</span>';
-        editBtn.addEventListener('click', () => startRemoteEdit(remoteData));
+        editBtn.addEventListener('click', () => startRemoteEdit(remote));
         actionsCell.appendChild(editBtn);
 
         const deleteBtn = document.createElement('button');
         deleteBtn.type = 'button';
         deleteBtn.className = 'btn btn-outline-danger btn-sm';
         deleteBtn.innerHTML = '<span aria-hidden="true">&times;</span><span class="visually-hidden">Eliminar</span>';
-        deleteBtn.addEventListener('click', () => confirmRemoteDeletion(remoteData));
+        deleteBtn.addEventListener('click', () => confirmRemoteDeletion(remote));
         actionsCell.appendChild(deleteBtn);
 
         tr.appendChild(actionsCell);
@@ -421,8 +422,8 @@ async function loadRemotes() {
       }
       if (select) {
         const opt = document.createElement('option');
-        opt.value = remoteData.name;
-        opt.textContent = remoteData.name;
+        opt.value = name;
+        opt.textContent = name;
         select.appendChild(opt);
       }
     });
@@ -542,6 +543,17 @@ function startRemoteEdit(remote) {
     `Editando el remote ${remote.name}. Completá los datos y guardá para aplicar los cambios.`,
     'info',
   );
+  const normalizedType = (remote.type || '').toLowerCase();
+  const storedRoute = remote.route || remote.share_url || '';
+  if (normalizedType === 'sftp' && storedRoute) {
+    updateSftpSelectedPath(storedRoute);
+  }
+  if (normalizedType === 'local' && storedRoute) {
+    const select = document.getElementById('local_path');
+    if (select) {
+      select.value = storedRoute;
+    }
+  }
 }
 
 function confirmRemoteDeletion(remote) {
@@ -641,6 +653,12 @@ function populateDirectorySelect(select, directories, emptyMessageId) {
     select.appendChild(option);
   });
   select.disabled = false;
+  if (editingRemote && editingRemote.type === 'local') {
+    const target = editingRemote.route || editingRemote.share_url || '';
+    if (target) {
+      select.value = target;
+    }
+  }
 }
 
 async function showPanelForType(type) {
@@ -931,14 +949,23 @@ function initRemoteForm() {
         delete directoryCache.local;
         resetSftpBrowser(true);
         const feedbackOptions = {};
-        let successMessage = isEditing
+        const rawRoute = (data && typeof data.route === 'string' && data.route.trim())
+          ? data.route.trim()
+          : (data && typeof data.share_url === 'string' && data.share_url.trim())
+            ? data.share_url.trim()
+            : '';
+        const successBase = isEditing
           ? 'Remote actualizado correctamente.'
           : 'Remote guardado correctamente.';
-        if (data && typeof data.share_url === 'string' && data.share_url.trim()) {
-          feedbackOptions.link = data.share_url.trim();
-          successMessage = isEditing
-            ? 'Remote actualizado correctamente. Compartí este enlace:'
-            : 'Remote guardado correctamente. Compartí este enlace:';
+        let successMessage = successBase;
+        if (rawRoute) {
+          const looksLikeUrl = /^https?:\/\//i.test(rawRoute);
+          if (type === 'drive' && looksLikeUrl) {
+            feedbackOptions.link = rawRoute;
+            successMessage = `${successBase} Compartí este enlace:`;
+          } else {
+            successMessage = `${successBase} Ruta configurada: ${rawRoute}`;
+          }
         }
         showFeedback(successMessage, 'success', feedbackOptions);
         loadRemotes();
