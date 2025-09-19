@@ -90,6 +90,7 @@ def create_app() -> Flask:
         local_source_path: str | None = None
         local_base_path: str | None = None
         local_move_mode: str | None = None
+        config_snapshot: dict[str, str] | None = None
 
     class RemoteOperationError(Exception):
         """Raised when a remote operation fails for a known reason."""
@@ -447,6 +448,10 @@ def create_app() -> Flask:
                 plan.cleanup_on_error = True
                 plan.drive_mode = "shared"
                 plan.drive_remote_path = drive_remote_path
+                plan.config_snapshot = {
+                    "type": "alias",
+                    "remote": drive_remote_path,
+                }
             else:
                 if not token:
                     raise RemoteOperationError("token is required")
@@ -470,6 +475,16 @@ def create_app() -> Flask:
                     plan.command.extend(["client_id", client_id])
                 if client_secret:
                     plan.command.extend(["client_secret", client_secret])
+                config_snapshot: dict[str, str] = {
+                    "type": "drive",
+                    "token": token,
+                    "scope": os.getenv("RCLONE_DRIVE_SCOPE", "drive"),
+                }
+                if client_id:
+                    config_snapshot["client_id"] = client_id
+                if client_secret:
+                    config_snapshot["client_secret"] = client_secret
+                plan.config_snapshot = config_snapshot
         elif normalized_type == "local":
             directory_entries = get_local_directories()
             if not directory_entries:
@@ -549,6 +564,7 @@ def create_app() -> Flask:
             plan.local_source_path = existing_path
             plan.local_base_path = base_path
             plan.local_move_mode = move_mode
+            plan.config_snapshot = {"type": "alias", "remote": target_path}
         elif normalized_type == "sftp":
             host = (settings.get("host") or "").strip()
             username = (settings.get("username") or settings.get("user") or "").strip()
@@ -591,6 +607,16 @@ def create_app() -> Flask:
             plan.post_commands = [["mkdir", f"{name}:"], ["lsd", f"{name}:"]]
             plan.cleanup_on_error = True
             plan.error_translator = _translate_sftp_error
+            config_snapshot: dict[str, str] = {
+                "type": "sftp",
+                "host": host,
+                "user": username,
+                "path": target_path,
+                "pass": obscured_password,
+            }
+            if port:
+                config_snapshot["port"] = port
+            plan.config_snapshot = config_snapshot
         elif normalized_type == "onedrive":
             raise RemoteOperationError("OneDrive aún está en construcción")
         else:
@@ -693,6 +719,29 @@ def create_app() -> Flask:
             pass
 
     def _load_remote_configuration(remote_name: str) -> dict[str, str] | None:
+        normalized_name = (remote_name or "").strip()
+        if not normalized_name:
+            return None
+
+        with SessionLocal() as db:
+            stored = (
+                db.query(RcloneRemote)
+                .filter_by(name=normalized_name)
+                .one_or_none()
+            )
+            if stored and (stored.config or "").strip():
+                try:
+                    payload = json.loads(stored.config or "{}")
+                except json.JSONDecodeError:
+                    payload = None
+                if isinstance(payload, dict) and payload.get("type"):
+                    config: dict[str, str] = {}
+                    for key, value in payload.items():
+                        if value is None:
+                            continue
+                        config[str(key)] = str(value)
+                    return config
+
         try:
             result = run_rclone(
                 ["config", "dump"],
@@ -711,7 +760,7 @@ def create_app() -> Flask:
                 "No se pudo interpretar la configuración de rclone.",
                 500,
             ) from exc
-        entry = payload.get(remote_name)
+        entry = payload.get(normalized_name)
         if entry is None:
             return None
         if not isinstance(entry, dict):
@@ -915,6 +964,11 @@ def create_app() -> Flask:
         """Ensure stored remotes exist in the local rclone configuration."""
 
         try:
+            ensure_default_drive_remote()
+        except (DefaultDriveRemoteError, RuntimeError):
+            pass
+
+        try:
             configured = set(fetch_configured_remotes())
         except RuntimeError:
             return
@@ -922,10 +976,12 @@ def create_app() -> Flask:
         with SessionLocal() as db:
             for remote in db.query(RcloneRemote).all():
                 name = (remote.name or "").strip()
-                if not name or name in configured:
+                if not name:
                     continue
                 raw_config = (remote.config or "").strip()
                 if not raw_config:
+                    continue
+                if name in configured:
                     continue
                 try:
                     config_payload = json.loads(raw_config)
@@ -933,8 +989,13 @@ def create_app() -> Flask:
                     continue
                 if not isinstance(config_payload, dict):
                     continue
+                normalized_config: dict[str, str] = {}
+                for key, value in config_payload.items():
+                    if value is None:
+                        continue
+                    normalized_config[str(key)] = str(value)
                 try:
-                    _apply_remote_configuration(name, config_payload)
+                    _apply_remote_configuration(name, normalized_config)
                 except (RemoteOperationError, RuntimeError, subprocess.CalledProcessError):
                     continue
                 configured.add(name)
@@ -1266,13 +1327,13 @@ def create_app() -> Flask:
                 local_created_path = local_target_path
             share_url = _execute_remote_plan(name, plan)
             remote_created = True
-            remote_config = _load_remote_configuration(name)
-            if not remote_config:
+            snapshot = plan.config_snapshot or {}
+            if not snapshot or not snapshot.get("type"):
                 raise RemoteOperationError(
                     "No se pudo guardar la configuración del remote.",
                     500,
                 )
-            config_payload = json.dumps(remote_config, ensure_ascii=False)
+            config_payload = json.dumps(snapshot, ensure_ascii=False)
         except RemoteOperationError as exc:
             if remote_created:
                 _delete_remote_safely(name)
@@ -1583,13 +1644,13 @@ def create_app() -> Flask:
         config_payload: str | None = None
         try:
             share_url = _execute_remote_plan(target_name, plan)
-            remote_config = _load_remote_configuration(target_name)
-            if not remote_config:
+            snapshot = plan.config_snapshot or {}
+            if not snapshot or not snapshot.get("type"):
                 raise RemoteOperationError(
                     "No se pudo guardar la configuración del remote.",
                     500,
                 )
-            config_payload = json.dumps(remote_config, ensure_ascii=False)
+            config_payload = json.dumps(snapshot, ensure_ascii=False)
         except RemoteOperationError as exc:
             revert_errors = _rollback_local_changes(
                 move_mode,

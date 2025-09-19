@@ -198,8 +198,14 @@ def test_create_local_remote(monkeypatch, tmp_path):
     alias_index = create_cmd.index("alias")
     assert create_cmd[alias_index + 1] == "remote"
     assert create_cmd[alias_index + 2] == str(expected_path)
-    assert any(cmd[3:5] == ["config", "dump"] for cmd in commands)
+    from orchestrator.app.models import RcloneRemote
 
+    with app_module.SessionLocal() as db:  # type: ignore[attr-defined]
+        stored = db.query(RcloneRemote).filter_by(name="local1").one()
+        assert json.loads(stored.config) == {
+            "type": "alias",
+            "remote": str(expected_path),
+        }
 
 def test_create_local_remote_with_quoted_directory(monkeypatch, tmp_path):
     base_dir = tmp_path / "backups"
@@ -258,7 +264,14 @@ def test_create_local_remote_with_quoted_directory(monkeypatch, tmp_path):
     alias_index = create_cmd.index("alias")
     assert create_cmd[alias_index + 1] == "remote"
     assert create_cmd[alias_index + 2] == str(expected_path)
-    assert any(cmd[3:5] == ["config", "dump"] for cmd in commands)
+    from orchestrator.app.models import RcloneRemote
+
+    with app_module.SessionLocal() as db:  # type: ignore[attr-defined]
+        stored = db.query(RcloneRemote).filter_by(name="local1").one()
+        assert json.loads(stored.config) == {
+            "type": "alias",
+            "remote": str(expected_path),
+        }
 
 
 def test_create_local_remote_invalid_path(monkeypatch):
@@ -356,7 +369,18 @@ def test_create_sftp_remote_success(monkeypatch):
     assert create_cmd[path_index + 1] == "/srv/backups/sftp1"
     mkdir_cmd = next(call["cmd"] for call in calls if call["cmd"][3:] == ["mkdir", "sftp1:"])
     lsd_cmd = next(call["cmd"] for call in calls if call["cmd"][3:] == ["lsd", "sftp1:"])
-    assert any(call["cmd"][3:5] == ["config", "dump"] for call in calls)
+    from orchestrator.app.models import RcloneRemote
+
+    with app_module.SessionLocal() as db:  # type: ignore[attr-defined]
+        stored = db.query(RcloneRemote).filter_by(name="sftp1").one()
+        assert json.loads(stored.config) == {
+            "type": "sftp",
+            "host": "sftp.internal",
+            "user": "backup",
+            "port": "2222",
+            "pass": "obscured-secret",
+            "path": "/srv/backups/sftp1",
+        }
 
 
 def test_create_sftp_remote_missing_credentials(monkeypatch):
