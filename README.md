@@ -32,17 +32,13 @@ backup-orchestrator/
    └─ app/            # código del orquestador (UI + scheduler + runner)
 ```
 
-### ¿Para qué usamos el volumen `backups`?
+### ¿Cómo se montan las carpetas locales?
 
-El servicio define un volumen Docker llamado `backups` que se monta dentro del
-contenedor en la ruta `/backups`. Ese espacio queda disponible para compartir
-archivos temporales entre el orquestador y las apps que exportan sus datos.
-
-Además se monta la carpeta indicada por la variable `LOCAL_DIRECTORIES_ROOT`
+El servicio monta la carpeta indicada por la variable `RCLONE_LOCAL_DIRECTORIES`
 (por defecto `./datosPersistentes/local-directories`) en la ruta
 `/local-directories`. Allí es donde deben existir las carpetas locales que se
-exponen a través de los remotes de rclone. Configurá la variable
-`RCLONE_LOCAL_DIRECTORIES` con esas rutas (por ejemplo,
+exponen a través de los remotes de rclone. Configurá la misma variable con las
+rutas que quieras habilitar (por ejemplo,
 `RCLONE_LOCAL_DIRECTORIES=Respaldos|/local-directories/mi-app`) y la UI las
 ofrecerá como destino para crear remotes de tipo **Local**. Los archivos se
 almacenarán en el bind mount del host, por lo que quedan disponibles fuera del
@@ -76,7 +72,6 @@ RCLONE_DRIVE_CLIENT_ID=tu-client-id.apps.googleusercontent.com
 RCLONE_DRIVE_CLIENT_SECRET=tu-client-secret
 RCLONE_DRIVE_TOKEN={"access_token": "...", "refresh_token": "..."}
 # Carpetas locales disponibles en la UI (separá con `;` para múltiples entradas)
-LOCAL_DIRECTORIES_ROOT=./datosPersistentes/local-directories
 RCLONE_LOCAL_DIRECTORIES=Respaldos|/local-directories/mi-app
 # Opcional: ajustá el scope y los permisos de compartición
 # RCLONE_DRIVE_SCOPE=drive
@@ -86,7 +81,7 @@ RCLONE_LOCAL_DIRECTORIES=Respaldos|/local-directories/mi-app
 # Cada app elige su carpeta destino; el orquestador guarda el folderId por app
 ```
 
-> El `docker-compose` monta automáticamente `LOCAL_DIRECTORIES_ROOT` dentro del
+> El `docker-compose` monta automáticamente `RCLONE_LOCAL_DIRECTORIES` dentro del
 > contenedor en la ruta `/local-directories`. Podés ajustar esa variable para
 > apuntarla a cualquier carpeta del host donde quieras almacenar los respaldos
 > locales.
