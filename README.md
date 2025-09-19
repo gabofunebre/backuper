@@ -64,6 +64,7 @@ RCLONE_DRIVE_TOKEN={"access_token": "...", "refresh_token": "..."}
 
 ## 4) Primer arranque
 El `docker-compose` monta `./rcloneConfig` dentro del contenedor para conservar la configuración de rclone entre reinicios. La carpeta se crea automáticamente al levantar los servicios (o podés crearla manualmente con `mkdir -p rcloneConfig`). Mientras no borres esa carpeta en el host (o elimines su contenido), cualquier recreación del contenedor volverá a usar exactamente la misma configuración.
+
 ```bash
 docker compose up -d --build
 ```
@@ -100,6 +101,7 @@ Si preferís evitar la consola, la interfaz web incluye una sección para inicia
   - También podés elegir "Usar mi propia cuenta" y pegar un token OAuth si necesitás operar con otra cuenta de Drive.
   - Para **local** se muestran las carpetas habilitadas mediante `RCLONE_LOCAL_DIRECTORIES`.
   - Para **SFTP** se crea la carpeta objetivo dentro del servidor remoto y se valida la conexión antes de guardar.
+
 - La configuración se guarda en `./rcloneConfig`, por lo que no se pierde al reiniciar el contenedor.
 
 ## 7) Contrato v1 para las Apps
