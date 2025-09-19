@@ -100,6 +100,16 @@ def create_app() -> Flask:
     admin_pass = os.getenv("APP_ADMIN_PASS")
     app.secret_key = os.getenv("APP_SECRET_KEY", "devkey")
 
+    def _strip_enclosing_quotes(value: str | None) -> str:
+        """Remove matching quotes surrounding *value* if present."""
+
+        if value is None:
+            return ""
+        text = value.strip()
+        if len(text) >= 2 and text[0] == text[-1] and text[0] in {'"', "'"}:
+            text = text[1:-1].strip()
+        return text
+
     def _parse_directory_config(value: str) -> list[dict[str, str]]:
         """Parse a delimited list of directories from *value*."""
 
@@ -110,16 +120,16 @@ def create_app() -> Flask:
             item = raw.strip()
             if not item:
                 continue
-            label, sep, path = item.partition("|")
+            label_part, sep, path_part = item.partition("|")
             if sep:
-                label = label.strip() or path.strip()
-                path = path.strip()
+                cleaned_path = _strip_enclosing_quotes(path_part)
+                cleaned_label = _strip_enclosing_quotes(label_part) or cleaned_path
             else:
-                path = label.strip()
-                label = path
-            if not path:
+                cleaned_path = _strip_enclosing_quotes(label_part)
+                cleaned_label = cleaned_path
+            if not cleaned_path:
                 continue
-            entries.append({"label": label.strip(), "path": path})
+            entries.append({"label": cleaned_label or cleaned_path, "path": cleaned_path})
         return entries
 
     def get_local_directories() -> list[dict[str, str]]:
@@ -128,7 +138,10 @@ def create_app() -> Flask:
     def _ensure_absolute_path(value: str | None) -> str | None:
         if value is None:
             return None
-        candidate = value.strip()
+        candidate = _strip_enclosing_quotes(value)
+        if not candidate:
+            return None
+        candidate = os.path.expanduser(candidate)
         if not candidate:
             return None
         return os.path.abspath(candidate)
@@ -459,13 +472,18 @@ def create_app() -> Flask:
             directory_entries = get_local_directories()
             if not directory_entries:
                 raise RemoteOperationError("no local directories configured", 500)
-            path = (settings.get("path") or "").strip()
+            raw_path_setting = settings.get("path")
+            if isinstance(raw_path_setting, str):
+                path = _strip_enclosing_quotes(raw_path_setting)
+            else:
+                path = _strip_enclosing_quotes(str(raw_path_setting or ""))
             if not path:
                 raise RemoteOperationError(
                     "Seleccioná la carpeta local donde guardar los respaldos."
                 )
             available_paths = {
-                (entry.get("path") or "").strip() for entry in directory_entries
+                _strip_enclosing_quotes((entry.get("path") or ""))
+                for entry in directory_entries
             }
             if path not in available_paths:
                 raise RemoteOperationError("invalid path")
