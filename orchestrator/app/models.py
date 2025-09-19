@@ -1,6 +1,6 @@
-from typing import Optional
+import datetime
 
-from sqlalchemy import Column, Integer, String
+from sqlalchemy import Column, DateTime, Integer, String
 
 from .database import Base
 
@@ -28,20 +28,6 @@ class RcloneRemote(Base):
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String, unique=True, nullable=False)
     type = Column(String, nullable=True)
+    route = Column(String, nullable=True)
     share_url = Column(String, nullable=True)
-
-    @property
-    def route(self) -> Optional[str]:
-        """Alias legible para el campo ``share_url``.
-
-        En la base seguimos guardando el valor en ``share_url`` para mantener la
-        compatibilidad con instalaciones existentes, pero la lógica de la
-        aplicación puede trabajar con ``route`` para representar tanto enlaces
-        como rutas locales.
-        """
-
-        return self.share_url
-
-    @route.setter
-    def route(self, value: Optional[str]) -> None:
-        self.share_url = value
+    created_at = Column(DateTime, nullable=True, default=datetime.datetime.utcnow)
