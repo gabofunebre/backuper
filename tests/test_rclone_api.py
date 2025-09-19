@@ -263,13 +263,14 @@ def test_create_rclone_remote_shared_success(monkeypatch, app):
     assert share_cmd[:3] == ["rclone", "--config", config_path]
     assert share_cmd[3:6] == ["backend", "command", "gdrive:foo"]
     share_index = share_cmd.index("share")
-    assert share_cmd[share_index + 1 : share_index + 4] == [
-        "--share-with",
-        "user@example.com",
-        "--type",
+    assert share_cmd[share_index + 1 : share_index + 7] == [
+        "--option",
+        "share-with=user@example.com",
+        "--option",
+        "type=user",
+        "--option",
+        "role=writer",
     ]
-    assert share_cmd[share_index + 4 : share_index + 6] == ["user", "--role"]
-    assert share_cmd[share_index + 6] == "writer"
     assert alias_cmd[:3] == ["rclone", "--config", config_path]
     assert alias_cmd[3:9] == [
         "config",

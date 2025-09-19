@@ -529,12 +529,12 @@ def create_app() -> Flask:
                         "command",
                         remote_path,
                         "share",
-                        "--share-with",
-                        email,
-                        "--type",
-                        os.getenv("RCLONE_DRIVE_SHARE_TYPE", "user"),
-                        "--role",
-                        os.getenv("RCLONE_DRIVE_SHARE_ROLE", "writer"),
+                        "--option",
+                        f"share-with={email}",
+                        "--option",
+                        f"type={os.getenv('RCLONE_DRIVE_SHARE_TYPE', 'user')}",
+                        "--option",
+                        f"role={os.getenv('RCLONE_DRIVE_SHARE_ROLE', 'writer')}",
                     ],
                 ]
                 args = base_args + ["alias", "remote", remote_path]
