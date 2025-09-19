@@ -207,7 +207,6 @@ def test_create_local_remote(monkeypatch, tmp_path):
             "remote": str(expected_path),
         }
 
-
 def test_create_local_remote_with_quoted_directory(monkeypatch, tmp_path):
     base_dir = tmp_path / "backups"
     base_dir.mkdir()

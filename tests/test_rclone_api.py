@@ -236,7 +236,7 @@ def test_create_rclone_remote_custom_success(monkeypatch, app):
     assert "id" in data and isinstance(data["id"], int)
     assert "route" not in data
     assert "share_url" not in data
-    assert len(calls) >= 2
+    assert len(calls) >= 3
     config_path = os.getenv("RCLONE_CONFIG")
     assert calls[0] == ["rclone", "--config", config_path, "listremotes"]
     create_cmd = next(
@@ -399,6 +399,7 @@ def test_create_rclone_remote_shared_success(monkeypatch, app):
         for cmd in calls
     )
     assert any(len(cmd) > 4 and cmd[3] == "link" and "gdrive:foo" in cmd for cmd in calls)
+    assert any(cmd[3:5] == ["config", "dump"] for cmd in calls)
 
     from orchestrator.app import SessionLocal
     from orchestrator.app.models import RcloneRemote
@@ -468,6 +469,7 @@ def test_create_rclone_remote_local_success(monkeypatch, app, tmp_path):
         "remote",
     ]
     assert cmd[9] == str(expected_path)
+    assert any(cmd[3:5] == ["config", "dump"] for cmd in calls)
     assert expected_path.is_dir()
 
     from orchestrator.app import SessionLocal
@@ -1014,7 +1016,6 @@ def test_restore_persisted_remotes_on_startup(monkeypatch, tmp_path):
             stored = db.query(RcloneRemote).filter_by(name="localbackup").one()
             assert stored.config
 
-
 def test_restore_persisted_remotes_backfills_missing_config(monkeypatch, tmp_path):
     db_path = tmp_path / "state.db"
     config_file = tmp_path / "rclone.conf"
@@ -1094,7 +1095,6 @@ def test_restore_persisted_remotes_backfills_missing_config(monkeypatch, tmp_pat
     with SessionLocal() as db:
         stored = db.query(RcloneRemote).filter_by(name="legacy").one()
         assert stored.config is None
-
 
 def test_browse_sftp_directories_success(monkeypatch, app):
     calls: list[list[str]] = []
@@ -1257,6 +1257,17 @@ def test_create_sftp_remote_success(monkeypatch, app):
     lsd_cmd = next(cmd for cmd in calls if cmd[3:] == ["lsd", "sftpbackup:"])
     assert mkdir_cmd[0] == "rclone"
     assert lsd_cmd[0] == "rclone"
+    assert any(cmd[3:5] == ["config", "dump"] for cmd in calls)
+
+    from orchestrator.app import SessionLocal
+    from orchestrator.app.models import RcloneRemote
+
+    with SessionLocal() as db:
+        stored = db.query(RcloneRemote).filter_by(name="sftpbackup").one()
+        assert stored.config
+        stored_config = json.loads(stored.config)
+        assert stored_config.get("type") == "sftp"
+        assert stored_config.get("path") == "/data/sftpbackup"
 
     from orchestrator.app import SessionLocal
     from orchestrator.app.models import RcloneRemote
@@ -1659,6 +1670,7 @@ def test_create_rclone_remote_shared_bootstrap_default_remote(monkeypatch, app):
     with SessionLocal() as db:
         stored = db.query(RcloneRemote).filter_by(name="foo").one()
         assert json.loads(stored.config) == {"type": "alias", "remote": "gdrive:foo"}
+
 
 
 def test_create_rclone_remote_shared_missing_default_remote(monkeypatch, app):
