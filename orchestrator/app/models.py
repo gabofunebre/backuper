@@ -18,3 +18,12 @@ class App(Base):
     rclone_remote = Column(String, nullable=True)
     # Number of backups to retain
     retention = Column(Integer, nullable=True)
+
+
+class RcloneRemote(Base):
+    __tablename__ = "rclone_remotes"
+
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String, unique=True, nullable=False)
+    type = Column(String, nullable=True)
+    share_url = Column(String, nullable=True)

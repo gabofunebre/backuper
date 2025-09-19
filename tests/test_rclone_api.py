@@ -42,9 +42,46 @@ def test_list_rclone_remotes(monkeypatch, app):
     client.post("/login", data={"username": "admin", "password": "secret"})
     resp = client.get("/rclone/remotes")
     assert resp.status_code == 200
-    assert resp.get_json() == ["gdrive", "other"]
+    assert resp.get_json() == [{"name": "gdrive"}, {"name": "other"}]
     config_path = os.getenv("RCLONE_CONFIG")
     assert calls == [["rclone", "--config", config_path, "listremotes"]]
+
+
+def test_list_rclone_remotes_with_metadata(monkeypatch, app):
+    class DummyResult:
+        def __init__(self, stdout: str = "foo:\n") -> None:
+            self.stdout = stdout
+            self.stderr = ""
+
+    def fake_run(cmd, capture_output, text, check):
+        return DummyResult()
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    from orchestrator.app import SessionLocal
+    from orchestrator.app.models import RcloneRemote
+
+    with SessionLocal() as db:
+        db.add(
+            RcloneRemote(
+                name="foo",
+                type="drive",
+                share_url="https://drive.google.com/drive/folders/demo",
+            )
+        )
+        db.commit()
+
+    client = app.test_client()
+    client.post("/login", data={"username": "admin", "password": "secret"})
+    resp = client.get("/rclone/remotes")
+    assert resp.status_code == 200
+    assert resp.get_json() == [
+        {
+            "name": "foo",
+            "type": "drive",
+            "share_url": "https://drive.google.com/drive/folders/demo",
+        }
+    ]
 
 
 def test_register_app_with_remote(monkeypatch, app):
@@ -237,6 +274,10 @@ def test_create_rclone_remote_shared_success(monkeypatch, app):
 
         if cmd[-1] == "listremotes":
             return DummyResult(stdout="gdrive:\n")
+        if "link" in cmd:
+            return DummyResult(
+                stdout="https://drive.google.com/drive/folders/abc123\n"
+            )
         return DummyResult()
 
     monkeypatch.setenv("RCLONE_REMOTE", "gdrive")
@@ -248,29 +289,21 @@ def test_create_rclone_remote_shared_success(monkeypatch, app):
         json={
             "name": "foo",
             "type": "drive",
-            "settings": {"mode": "shared", "email": "user@example.com"},
+            "settings": {"mode": "shared"},
         },
     )
     assert resp.status_code == 201
-    assert resp.get_json() == {"status": "ok"}
+    assert resp.get_json() == {
+        "status": "ok",
+        "share_url": "https://drive.google.com/drive/folders/abc123",
+    }
     assert len(calls) == 4
     config_path = os.getenv("RCLONE_CONFIG")
-    list_cmd, mkdir_cmd, share_cmd, alias_cmd = calls
+    list_cmd, mkdir_cmd, alias_cmd, link_cmd = calls
     assert list_cmd == ["rclone", "--config", config_path, "listremotes"]
     assert mkdir_cmd[:3] == ["rclone", "--config", config_path]
     assert mkdir_cmd[3] == "mkdir"
     assert mkdir_cmd[4] == "gdrive:foo"
-    assert share_cmd[:3] == ["rclone", "--config", config_path]
-    assert share_cmd[3:6] == ["backend", "command", "gdrive:foo"]
-    share_index = share_cmd.index("share")
-    assert share_cmd[share_index + 1 : share_index + 7] == [
-        "--option",
-        "share-with=user@example.com",
-        "--option",
-        "type=user",
-        "--option",
-        "role=writer",
-    ]
     assert alias_cmd[:3] == ["rclone", "--config", config_path]
     assert alias_cmd[3:9] == [
         "config",
@@ -281,6 +314,18 @@ def test_create_rclone_remote_shared_success(monkeypatch, app):
         "remote",
     ]
     assert alias_cmd[9] == "gdrive:foo"
+    assert link_cmd[:3] == ["rclone", "--config", config_path]
+    assert link_cmd[3] == "link"
+    assert "gdrive:foo" in link_cmd
+    assert "--create-link" in link_cmd
+
+    from orchestrator.app import SessionLocal
+    from orchestrator.app.models import RcloneRemote
+
+    with SessionLocal() as db:
+        stored = db.query(RcloneRemote).filter_by(name="foo").one()
+        assert stored.type == "drive"
+        assert stored.share_url == "https://drive.google.com/drive/folders/abc123"
 
 
 def test_create_rclone_remote_local_success(monkeypatch, app):
@@ -560,32 +605,6 @@ def test_create_rclone_remote_failure(monkeypatch, app):
     assert resp.get_json() == {"error": "boom"}
 
 
-def test_create_rclone_remote_shared_invalid_email(app):
-    client = app.test_client()
-    client.post("/login", data={"username": "admin", "password": "secret"})
-    resp = client.post(
-        "/rclone/remotes",
-        json={
-            "name": "foo",
-            "type": "drive",
-            "settings": {"mode": "shared", "email": "not-an-email"},
-        },
-    )
-    assert resp.status_code == 400
-    assert resp.get_json() == {"error": "invalid email"}
-
-
-def test_create_rclone_remote_shared_missing_email(app):
-    client = app.test_client()
-    client.post("/login", data={"username": "admin", "password": "secret"})
-    resp = client.post(
-        "/rclone/remotes",
-        json={"name": "foo", "type": "drive", "settings": {"mode": "shared"}},
-    )
-    assert resp.status_code == 400
-    assert resp.get_json() == {"error": "email is required"}
-
-
 def test_create_rclone_remote_shared_share_failure(monkeypatch, app):
     def fake_run(cmd, capture_output, text, check):
         class DummyResult:
@@ -597,7 +616,9 @@ def test_create_rclone_remote_shared_share_failure(monkeypatch, app):
             return DummyResult(stdout="gdrive:\n")
         if "mkdir" in cmd:
             return DummyResult()
-        if "share" in cmd:
+        if "config" in cmd and "alias" in cmd:
+            return DummyResult()
+        if "link" in cmd:
             raise subprocess.CalledProcessError(1, cmd, stderr="share failed")
         raise AssertionError("unexpected command execution order")
 
@@ -610,11 +631,42 @@ def test_create_rclone_remote_shared_share_failure(monkeypatch, app):
         json={
             "name": "foo",
             "type": "drive",
-            "settings": {"mode": "shared", "email": "user@example.com"},
+            "settings": {"mode": "shared"},
         },
     )
-    assert resp.status_code == 400
+    assert resp.status_code == 500
     assert resp.get_json() == {"error": "share failed"}
+
+
+def test_create_rclone_remote_shared_missing_share_url(monkeypatch, app):
+    def fake_run(cmd, capture_output, text, check):
+        class DummyResult:
+            def __init__(self, stdout: str = "", stderr: str = "") -> None:
+                self.stdout = stdout
+                self.stderr = stderr
+
+        if cmd[-1] == "listremotes":
+            return DummyResult(stdout="gdrive:\n")
+        if "mkdir" in cmd:
+            return DummyResult()
+        if "config" in cmd and "alias" in cmd:
+            return DummyResult()
+        if "link" in cmd:
+            return DummyResult(stdout="\n")
+        raise AssertionError("unexpected command execution order")
+
+    monkeypatch.setenv("RCLONE_REMOTE", "gdrive")
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    client = app.test_client()
+    client.post("/login", data={"username": "admin", "password": "secret"})
+    resp = client.post(
+        "/rclone/remotes",
+        json={"name": "foo", "type": "drive", "settings": {"mode": "shared"}},
+    )
+    assert resp.status_code == 500
+    assert resp.get_json() == {
+        "error": "No se pudo generar el enlace compartido de Google Drive.",
+    }
 
 
 def test_create_rclone_remote_invalid_drive_mode(app):
@@ -645,6 +697,10 @@ def test_create_rclone_remote_shared_bootstrap_default_remote(monkeypatch, app):
 
         if cmd[-1] == "listremotes":
             return DummyResult(stdout="")
+        if "link" in cmd:
+            return DummyResult(
+                stdout="https://drive.google.com/drive/folders/new\n"
+            )
         return DummyResult()
 
     monkeypatch.setenv("RCLONE_REMOTE", "gdrive")
@@ -659,14 +715,17 @@ def test_create_rclone_remote_shared_bootstrap_default_remote(monkeypatch, app):
         json={
             "name": "foo",
             "type": "drive",
-            "settings": {"mode": "shared", "email": "user@example.com"},
+            "settings": {"mode": "shared"},
         },
     )
     assert resp.status_code == 201
-    assert resp.get_json() == {"status": "ok"}
+    assert resp.get_json() == {
+        "status": "ok",
+        "share_url": "https://drive.google.com/drive/folders/new",
+    }
     config_path = os.getenv("RCLONE_CONFIG")
     assert len(calls) == 5
-    list_cmd, default_create, mkdir_cmd, share_cmd, alias_cmd = calls
+    list_cmd, default_create, mkdir_cmd, alias_cmd, link_cmd = calls
     assert list_cmd == ["rclone", "--config", config_path, "listremotes"]
     assert default_create[:5] == [
         "rclone",
@@ -686,7 +745,6 @@ def test_create_rclone_remote_shared_bootstrap_default_remote(monkeypatch, app):
     assert "client_secret" in default_create
     assert default_create[default_create.index("client_secret") + 1] == "sec"
     assert mkdir_cmd[3] == "mkdir"
-    assert share_cmd[3:6] == ["backend", "command", "gdrive:foo"]
     assert alias_cmd[3:9] == [
         "config",
         "create",
@@ -695,6 +753,10 @@ def test_create_rclone_remote_shared_bootstrap_default_remote(monkeypatch, app):
         "alias",
         "remote",
     ]
+    assert alias_cmd[9] == "gdrive:foo"
+    assert link_cmd[:3] == ["rclone", "--config", config_path]
+    assert link_cmd[3] == "link"
+    assert "gdrive:foo" in link_cmd
 
 
 def test_create_rclone_remote_shared_missing_default_remote(monkeypatch, app):
@@ -721,7 +783,7 @@ def test_create_rclone_remote_shared_missing_default_remote(monkeypatch, app):
         json={
             "name": "foo",
             "type": "drive",
-            "settings": {"mode": "shared", "email": "user@example.com"},
+            "settings": {"mode": "shared"},
         },
     )
     assert resp.status_code == 500
