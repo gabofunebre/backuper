@@ -5,8 +5,6 @@ import importlib
 import subprocess
 from types import SimpleNamespace
 
-import pytest
-
 sys.path.append(os.path.dirname(os.path.dirname(__file__)))
 
 
@@ -367,8 +365,18 @@ def test_create_sftp_remote_success(monkeypatch):
     assert "port" in create_cmd and create_cmd[create_cmd.index("port") + 1] == "2222"
     path_index = create_cmd.index("path")
     assert create_cmd[path_index + 1] == "/srv/backups/sftp1"
-    mkdir_cmd = next(call["cmd"] for call in calls if call["cmd"][3:] == ["mkdir", "sftp1:"])
-    lsd_cmd = next(call["cmd"] for call in calls if call["cmd"][3:] == ["lsd", "sftp1:"])
+    assert any(
+        len(call["cmd"]) > 4
+        and call["cmd"][:4] == ["rclone", "--config", config_path, "mkdir"]
+        and call["cmd"][4] == "sftp1:"
+        for call in calls
+    )
+    assert any(
+        len(call["cmd"]) > 4
+        and call["cmd"][:4] == ["rclone", "--config", config_path, "lsd"]
+        and call["cmd"][4] == "sftp1:"
+        for call in calls
+    )
     from orchestrator.app.models import RcloneRemote
 
     with app_module.SessionLocal() as db:  # type: ignore[attr-defined]

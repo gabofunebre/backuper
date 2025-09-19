@@ -2,7 +2,6 @@ import os
 import subprocess
 import sys
 import tracemalloc
-import requests
 
 sys.path.append(os.path.dirname(os.path.dirname(__file__)))
 from orchestrator.services.client import BackupClient
