@@ -1,5 +1,6 @@
 const directoryCache = {};
 let driveValidation = { status: 'idle', token: '' };
+let editingRemote = null;
 const sftpState = {
   credentials: null,
   currentPath: '/',
@@ -317,20 +318,28 @@ async function loadRemotes() {
     }
     remotes.forEach((entry) => {
       const remote = typeof entry === 'string' ? { name: entry } : entry || {};
-      const name = remote.name || '';
-      const shareUrl = remote.share_url || '';
+      const remoteData = {
+        name: remote.name || '',
+        type: remote.type || '',
+        share_url: remote.share_url || '',
+      };
+      if (!remoteData.name) {
+        return;
+      }
       if (tbody) {
         const tr = document.createElement('tr');
+
         const nameCell = document.createElement('td');
-        nameCell.textContent = name;
+        nameCell.textContent = remoteData.name;
         tr.appendChild(nameCell);
+
         const linkCell = document.createElement('td');
-        if (shareUrl) {
+        if (remoteData.share_url) {
           const anchor = document.createElement('a');
-          anchor.href = shareUrl;
+          anchor.href = remoteData.share_url;
           anchor.target = '_blank';
           anchor.rel = 'noopener';
-          anchor.textContent = shareUrl;
+          anchor.textContent = remoteData.share_url;
           anchor.classList.add('text-break');
           linkCell.appendChild(anchor);
         } else {
@@ -338,12 +347,31 @@ async function loadRemotes() {
           linkCell.classList.add('text-muted');
         }
         tr.appendChild(linkCell);
+
+        const actionsCell = document.createElement('td');
+        actionsCell.className = 'text-end text-nowrap';
+
+        const editBtn = document.createElement('button');
+        editBtn.type = 'button';
+        editBtn.className = 'btn btn-outline-secondary btn-sm me-2';
+        editBtn.innerHTML = '<span aria-hidden="true">&#9998;</span><span class="visually-hidden">Editar</span>';
+        editBtn.addEventListener('click', () => startRemoteEdit(remoteData));
+        actionsCell.appendChild(editBtn);
+
+        const deleteBtn = document.createElement('button');
+        deleteBtn.type = 'button';
+        deleteBtn.className = 'btn btn-outline-danger btn-sm';
+        deleteBtn.innerHTML = '<span aria-hidden="true">&times;</span><span class="visually-hidden">Eliminar</span>';
+        deleteBtn.addEventListener('click', () => confirmRemoteDeletion(remoteData));
+        actionsCell.appendChild(deleteBtn);
+
+        tr.appendChild(actionsCell);
         tbody.appendChild(tr);
       }
-      if (select && name) {
+      if (select) {
         const opt = document.createElement('option');
-        opt.value = name;
-        opt.textContent = name;
+        opt.value = remoteData.name;
+        opt.textContent = remoteData.name;
         select.appendChild(opt);
       }
     });
@@ -394,6 +422,118 @@ function updateDriveFeedback(message, variant = 'muted') {
     target.classList.add('text-danger');
   } else {
     target.classList.add('text-muted');
+  }
+}
+
+function exitRemoteEditMode({ resetForm = false } = {}) {
+  editingRemote = null;
+  const nameInput = document.getElementById('remote_name');
+  const submitButton = document.getElementById('remote-submit');
+  const cancelButton = document.getElementById('remote-cancel-edit');
+  if (nameInput) {
+    nameInput.disabled = false;
+  }
+  if (submitButton) {
+    submitButton.textContent = 'Guardar remote';
+  }
+  if (cancelButton) {
+    cancelButton.classList.add('d-none');
+  }
+  if (resetForm) {
+    const form = document.getElementById('remote-form');
+    if (form) {
+      form.reset();
+    }
+    resetPanels();
+    driveValidation = { status: 'idle', token: '' };
+    updateDriveFeedback('', 'muted');
+    resetSftpBrowser(true);
+    showFeedback('', 'info');
+  }
+}
+
+function startRemoteEdit(remote) {
+  if (!remote || !remote.name) {
+    return;
+  }
+  const form = document.getElementById('remote-form');
+  if (!form) {
+    return;
+  }
+  editingRemote = { ...remote };
+  form.reset();
+  resetPanels();
+  driveValidation = { status: 'idle', token: '' };
+  updateDriveFeedback('', 'muted');
+  resetSftpBrowser(true);
+  const nameInput = document.getElementById('remote_name');
+  if (nameInput) {
+    nameInput.value = remote.name;
+    nameInput.disabled = true;
+  }
+  const typeSelect = document.getElementById('remote_type');
+  if (typeSelect) {
+    typeSelect.value = remote.type || '';
+    showPanelForType(typeSelect.value);
+    typeSelect.focus();
+  } else {
+    showPanelForType('');
+  }
+  const submitButton = document.getElementById('remote-submit');
+  if (submitButton) {
+    submitButton.textContent = 'Actualizar remote';
+  }
+  const cancelButton = document.getElementById('remote-cancel-edit');
+  if (cancelButton) {
+    cancelButton.classList.remove('d-none');
+  }
+  showFeedback(
+    `Editando el remote ${remote.name}. Completá los datos y guardá para aplicar los cambios.`,
+    'info',
+  );
+}
+
+function confirmRemoteDeletion(remote) {
+  if (!remote || !remote.name) {
+    return;
+  }
+  const confirmed = window.confirm(
+    `¿Seguro que querés eliminar el remote "${remote.name}"? Esta acción no se puede deshacer.`,
+  );
+  if (!confirmed) {
+    return;
+  }
+  handleRemoteDelete(remote);
+}
+
+async function handleRemoteDelete(remote) {
+  if (!remote || !remote.name) {
+    return;
+  }
+  toggleRemoteOverlay(true, 'Eliminando remote…');
+  try {
+    const resp = await fetch(`/rclone/remotes/${encodeURIComponent(remote.name)}`, {
+      method: 'DELETE',
+    });
+    if (resp.status === 401) {
+      window.location.href = '/login';
+      return;
+    }
+    const data = await resp.json().catch(() => ({}));
+    if (resp.ok) {
+      if (editingRemote && editingRemote.name === remote.name) {
+        exitRemoteEditMode({ resetForm: true });
+      }
+      showFeedback('Remote eliminado correctamente.', 'success');
+      loadRemotes();
+    } else {
+      const message = data && data.error ? data.error : 'No se pudo eliminar el remote.';
+      showFeedback(message, 'danger');
+    }
+  } catch (error) {
+    showFeedback('Ocurrió un error al comunicarse con el servidor.', 'danger');
+  } finally {
+    toggleRemoteOverlay(false);
   }
 }
 
@@ -577,6 +717,12 @@ function initRemoteForm() {
     return;
   }
   initSftpBrowser();
+  const cancelButton = document.getElementById('remote-cancel-edit');
+  if (cancelButton) {
+    cancelButton.addEventListener('click', () => {
+      exitRemoteEditMode({ resetForm: true });
+    });
+  }
   const typeSelect = document.getElementById('remote_type');
   if (typeSelect) {
     showPanelForType(typeSelect.value);
@@ -602,8 +748,13 @@ function initRemoteForm() {
     const nameInput = document.getElementById('remote_name');
     const type = typeSelect ? typeSelect.value : '';
     const name = nameInput ? nameInput.value.trim() : '';
+    const isEditing = Boolean(editingRemote && editingRemote.name);
     if (!name) {
       showFeedback('Completá un nombre para el remote.', 'danger');
+      return;
+    }
+    if (isEditing && editingRemote && editingRemote.name && name !== editingRemote.name) {
+      showFeedback('El nombre del remote no puede modificarse desde esta pantalla.', 'danger');
       return;
     }
     if (!type) {
@@ -611,8 +762,12 @@ function initRemoteForm() {
       return;
     }
 
-    const payload = { name, type, settings: {} };
-    let overlayMessage = 'Guardando remote…';
+    const payload = {
+      name: isEditing && editingRemote ? editingRemote.name : name,
+      type,
+      settings: {},
+    };
+    let overlayMessage = isEditing ? 'Actualizando remote…' : 'Guardando remote…';
     if (type === 'local') {
       const select = document.getElementById('local_path');
       const value = select ? select.value : '';
@@ -659,7 +814,9 @@ function initRemoteForm() {
       payload.settings.mode = mode;
       if (mode === 'shared') {
         payload.settings.folder_name = name;
-        overlayMessage = 'Creando carpeta y generando enlace en Google Drive…';
+        overlayMessage = isEditing
+          ? 'Actualizando carpeta y enlace en Google Drive…'
+          : 'Creando carpeta y generando enlace en Google Drive…';
       } else {
         const token = document.getElementById('drive_token')?.value.trim() || '';
         if (!token) {
@@ -698,8 +855,12 @@ function initRemoteForm() {
     }
     toggleRemoteOverlay(true, overlayMessage);
     try {
-      const resp = await fetch('/rclone/remotes', {
-        method: 'POST',
+      const endpoint =
+        isEditing && editingRemote
+          ? `/rclone/remotes/${encodeURIComponent(editingRemote.name)}`
+          : '/rclone/remotes';
+      const resp = await fetch(endpoint, {
+        method: isEditing ? 'PUT' : 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
       });
@@ -709,6 +870,9 @@ function initRemoteForm() {
       }
       const data = await resp.json().catch(() => ({}));
       if (resp.ok) {
+        if (isEditing) {
+          exitRemoteEditMode({ resetForm: false });
+        }
         form.reset();
         resetPanels();
         driveValidation = { status: 'idle', token: '' };
@@ -716,15 +880,19 @@ function initRemoteForm() {
         delete directoryCache.local;
         resetSftpBrowser(true);
         const feedbackOptions = {};
-        let successMessage = 'Remote guardado correctamente.';
+        let successMessage = isEditing
+          ? 'Remote actualizado correctamente.'
+          : 'Remote guardado correctamente.';
         if (data && typeof data.share_url === 'string' && data.share_url.trim()) {
           feedbackOptions.link = data.share_url.trim();
-          successMessage = 'Remote guardado correctamente. Compartí este enlace:';
+          successMessage = isEditing
+            ? 'Remote actualizado correctamente. Compartí este enlace:'
+            : 'Remote guardado correctamente. Compartí este enlace:';
         }
         showFeedback(successMessage, 'success', feedbackOptions);
         loadRemotes();
       } else {
-        const message = data && data.error ? data.error : 'No se pudo crear el remote';
+        const message = data && data.error ? data.error : 'No se pudo guardar el remote';
         showFeedback(message, 'danger');
       }
     } catch (err) {
