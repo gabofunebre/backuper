@@ -32,13 +32,9 @@ backup-orchestrator/
    └─ app/            # código del orquestador (UI + scheduler + runner)
 ```
 
-### ¿Para qué usamos el volumen `backups`?
+### ¿Cómo se montan las carpetas locales?
 
-El servicio define un volumen Docker llamado `backups` que se monta dentro del
-contenedor en la ruta `/backups`. Ese espacio queda disponible para compartir
-archivos temporales entre el orquestador y las apps que exportan sus datos.
-
-Además se monta la carpeta indicada por la variable `LOCAL_DIRECTORIES_ROOT`
+El servicio monta la carpeta indicada por la variable `LOCAL_DIRECTORIES_ROOT`
 (por defecto `./datosPersistentes/local-directories`) en la ruta
 `/local-directories`. Allí es donde deben existir las carpetas locales que se
 exponen a través de los remotes de rclone. Configurá la variable
