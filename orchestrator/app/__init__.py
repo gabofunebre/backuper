@@ -225,6 +225,7 @@ def create_app() -> Flask:
                 raise RemoteOperationError("path is required")
             if path not in directories:
                 raise RemoteOperationError("invalid path")
+            plan.share_url = path
             plan.command = [*base_args, "alias", "remote", path]
         elif normalized_type == "sftp":
             host = (settings.get("host") or "").strip()
@@ -580,8 +581,10 @@ def create_app() -> Flask:
             if stored_remote:
                 if stored_remote.type:
                     item["type"] = stored_remote.type
-                if stored_remote.share_url:
-                    item["share_url"] = stored_remote.share_url
+                route = (stored_remote.route or "").strip()
+                if route:
+                    item["route"] = route
+                    item["share_url"] = route
             entries.append(item)
         return jsonify(entries)
 
@@ -786,18 +789,18 @@ def create_app() -> Flask:
             existing = db.query(RcloneRemote).filter_by(name=name).one_or_none()
             if existing:
                 existing.type = remote_type
-                existing.share_url = share_url
+                existing.route = share_url
             else:
                 db.add(
                     RcloneRemote(
                         name=name,
                         type=remote_type,
-                        share_url=share_url,
+                        route=share_url,
                     )
                 )
             db.commit()
 
-        response = {"status": "ok"}
+        response = {"status": "ok", "route": share_url}
         if share_url:
             response["share_url"] = share_url
         return response, 201
@@ -890,18 +893,18 @@ def create_app() -> Flask:
             existing = db.query(RcloneRemote).filter_by(name=normalized_name).one_or_none()
             if existing:
                 existing.type = remote_type
-                existing.share_url = share_url
+                existing.route = share_url
             else:
                 db.add(
                     RcloneRemote(
                         name=normalized_name,
                         type=remote_type,
-                        share_url=share_url,
+                        route=share_url,
                     )
                 )
             db.commit()
 
-        response = {"status": "ok"}
+        response = {"status": "ok", "route": share_url}
         if share_url:
             response["share_url"] = share_url
         return response, 200
