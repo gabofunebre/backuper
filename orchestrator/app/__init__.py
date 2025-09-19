@@ -638,6 +638,12 @@ def create_app() -> Flask:
 
     def _restore_remote_backup(remote_name: str, backup_name: str) -> bool:
         try:
+            backup_config = _load_remote_configuration(backup_name)
+        except (RemoteOperationError, RuntimeError):
+            return False
+        if not backup_config:
+            return False
+        try:
             run_rclone(
                 ["config", "delete", remote_name],
                 capture_output=True,
@@ -650,13 +656,8 @@ def create_app() -> Flask:
             return False
 
         try:
-            run_rclone(
-                ["config", "copy", backup_name, remote_name],
-                capture_output=True,
-                text=True,
-                check=True,
-            )
-        except (subprocess.CalledProcessError, RuntimeError):
+            _apply_remote_configuration(remote_name, backup_config)
+        except (RemoteOperationError, subprocess.CalledProcessError, RuntimeError):
             return False
         return True
 
@@ -670,6 +671,73 @@ def create_app() -> Flask:
             )
         except (subprocess.CalledProcessError, RuntimeError):
             pass
+
+    def _load_remote_configuration(remote_name: str) -> dict[str, str] | None:
+        try:
+            result = run_rclone(
+                ["config", "dump"],
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+        except subprocess.CalledProcessError as exc:
+            message = (exc.stderr or exc.stdout or "").strip() or "No se pudo leer la configuración de rclone."
+            raise RemoteOperationError(message, 500) from exc
+        raw_output = (result.stdout or "").strip()
+        try:
+            payload = json.loads(raw_output or "{}")
+        except json.JSONDecodeError as exc:
+            raise RemoteOperationError(
+                "No se pudo interpretar la configuración de rclone.",
+                500,
+            ) from exc
+        entry = payload.get(remote_name)
+        if entry is None:
+            return None
+        if not isinstance(entry, dict):
+            raise RemoteOperationError(
+                "La configuración del remote tiene un formato desconocido.",
+                500,
+            )
+        config: dict[str, str] = {}
+        for key, value in entry.items():
+            if value is None:
+                continue
+            config[str(key)] = str(value)
+        return config
+
+    def _apply_remote_configuration(remote_name: str, config: dict[str, str]) -> None:
+        remote_type = (config.get("type") or "").strip()
+        if not remote_type:
+            raise RemoteOperationError(
+                "No se pudo determinar el tipo del remote en la copia de seguridad.",
+                500,
+            )
+        args: list[str] = [
+            "config",
+            "create",
+            "--non-interactive",
+            remote_name,
+            remote_type,
+        ]
+        for key, value in config.items():
+            if key in {"type", "name"}:
+                continue
+            args.extend([key, str(value)])
+        run_rclone(args, capture_output=True, text=True, check=True)
+
+    def _clone_remote_configuration(
+        source_name: str,
+        target_name: str,
+        *,
+        error_message: str | None = None,
+    ) -> None:
+        config = _load_remote_configuration(source_name)
+        if config is None:
+            raise RemoteOperationError(
+                error_message or "No se pudo replicar la configuración del remote.",
+            )
+        _apply_remote_configuration(target_name, config)
 
     def login_required(func):
         @wraps(func)
@@ -1268,14 +1336,16 @@ def create_app() -> Flask:
 
         backup_name = f"__backup__{uuid.uuid4().hex[:8]}"
         try:
-            run_rclone(
-                ["config", "copy", normalized_name, backup_name],
-                capture_output=True,
-                text=True,
-                check=True,
+            _clone_remote_configuration(
+                normalized_name,
+                backup_name,
+                error_message="No se pudo preparar la edición del remote.",
             )
         except RuntimeError:
             return {"error": "rclone is not installed"}, 500
+        except RemoteOperationError as exc:
+            _delete_remote_safely(backup_name)
+            return {"error": str(exc)}, exc.status_code
         except subprocess.CalledProcessError as exc:
             message = (exc.stderr or exc.stdout or "").strip() or "No se pudo preparar la edición del remote."
             _delete_remote_safely(backup_name)
@@ -1611,14 +1681,16 @@ def create_app() -> Flask:
         if requires_backup:
             backup_name = f"__delete__{uuid.uuid4().hex[:8]}"
             try:
-                run_rclone(
-                    ["config", "copy", normalized_name, backup_name],
-                    capture_output=True,
-                    text=True,
-                    check=True,
+                _clone_remote_configuration(
+                    normalized_name,
+                    backup_name,
+                    error_message="No se pudo preparar la eliminación del remote.",
                 )
             except RuntimeError:
                 return {"error": "rclone is not installed"}, 500
+            except RemoteOperationError as exc:
+                _delete_remote_safely(backup_name)
+                return {"error": str(exc)}, exc.status_code
             except subprocess.CalledProcessError as exc:
                 message = (exc.stderr or exc.stdout or "").strip() or "No se pudo preparar la eliminación del remote."
                 _delete_remote_safely(backup_name)

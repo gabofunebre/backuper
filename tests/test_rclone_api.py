@@ -1,3 +1,4 @@
+import json
 import os
 import sys
 import subprocess
@@ -413,10 +414,29 @@ def test_update_rclone_remote_local_success(monkeypatch, app, tmp_path):
             self.stdout = stdout
             self.stderr = stderr
 
+    config_entries = {
+        "foo": {"type": "alias", "remote": str(tmp_path / "foo")},
+    }
+
     def fake_run(cmd, capture_output, text, check):
         commands.append(cmd)
         if cmd[-1] == "listremotes":
             return DummyResult(stdout="foo:\n")
+        if len(cmd) >= 5 and cmd[3] == "config" and cmd[4] == "dump":
+            return DummyResult(stdout=json.dumps(config_entries))
+        if len(cmd) >= 6 and cmd[3] == "config" and cmd[4] == "delete":
+            config_entries.pop(cmd[5], None)
+            return DummyResult()
+        if len(cmd) >= 8 and cmd[3] == "config" and cmd[4] == "create":
+            name = cmd[6]
+            remote_type = cmd[7]
+            options: dict[str, str] = {}
+            for idx in range(8, len(cmd), 2):
+                if idx + 1 >= len(cmd):
+                    break
+                options[cmd[idx]] = cmd[idx + 1]
+            config_entries[name] = {"type": remote_type, **options}
+            return DummyResult()
         return DummyResult()
 
     monkeypatch.setenv("RCLONE_LOCAL_DIRECTORIES", str(tmp_path))
@@ -442,17 +462,33 @@ def test_update_rclone_remote_local_success(monkeypatch, app, tmp_path):
 
     config_path = os.getenv("RCLONE_CONFIG")
     assert commands[0] == ["rclone", "--config", config_path, "listremotes"]
-    assert commands[1][:6] == ["rclone", "--config", config_path, "config", "copy", "foo"]
-    backup_name = commands[1][6]
-    assert commands[2] == ["rclone", "--config", config_path, "config", "delete", "foo"]
+    dump_cmd = commands[1]
+    assert dump_cmd[:5] == ["rclone", "--config", config_path, "config", "dump"]
+    backup_create_cmd = next(
+        cmd
+        for cmd in commands
+        if len(cmd) >= 8
+        and cmd[3] == "config"
+        and cmd[4] == "create"
+        and cmd[6].startswith("__backup__")
+    )
+    backup_name = backup_create_cmd[6]
+    assert backup_create_cmd[:8] == [
+        "rclone",
+        "--config",
+        config_path,
+        "config",
+        "create",
+        "--non-interactive",
+        backup_name,
+        "alias",
+    ]
+    delete_cmd = ["rclone", "--config", config_path, "config", "delete", "foo"]
+    assert delete_cmd in commands
     create_cmd = next(
         cmd
         for cmd in commands
-        if cmd[:9]
-        == [
-            "rclone",
-            "--config",
-            config_path,
+        if len(cmd) >= 10 and cmd[3:9] == [
             "config",
             "create",
             "--non-interactive",
@@ -461,17 +497,6 @@ def test_update_rclone_remote_local_success(monkeypatch, app, tmp_path):
             "remote",
         ]
     )
-    assert create_cmd[:9] == [
-        "rclone",
-        "--config",
-        config_path,
-        "config",
-        "create",
-        "--non-interactive",
-        "foo",
-        "alias",
-        "remote",
-    ]
     assert create_cmd[9] == str(expected_path)
     assert [
         "rclone",
@@ -501,12 +526,34 @@ def test_update_rclone_remote_failure_restores_backup(monkeypatch, app, tmp_path
             self.stdout = stdout
             self.stderr = stderr
 
+    config_entries = {
+        "foo": {"type": "alias", "remote": str(tmp_path / "foo")},
+    }
+    fail_next_create = True
+
     def fake_run(cmd, capture_output, text, check):
         commands.append(cmd)
         if cmd[-1] == "listremotes":
             return DummyResult(stdout="foo:\n")
-        if cmd[3:7] == ["config", "create", "--non-interactive", "foo"]:
-            raise subprocess.CalledProcessError(1, cmd, stderr="boom")
+        if len(cmd) >= 5 and cmd[3] == "config" and cmd[4] == "dump":
+            return DummyResult(stdout=json.dumps(config_entries))
+        if len(cmd) >= 6 and cmd[3] == "config" and cmd[4] == "delete":
+            config_entries.pop(cmd[5], None)
+            return DummyResult()
+        if len(cmd) >= 8 and cmd[3] == "config" and cmd[4] == "create":
+            name = cmd[6]
+            remote_type = cmd[7]
+            nonlocal fail_next_create
+            if name == "foo" and fail_next_create:
+                fail_next_create = False
+                raise subprocess.CalledProcessError(1, cmd, stderr="boom")
+            options: dict[str, str] = {}
+            for idx in range(8, len(cmd), 2):
+                if idx + 1 >= len(cmd):
+                    break
+                options[cmd[idx]] = cmd[idx + 1]
+            config_entries[name] = {"type": remote_type, **options}
+            return DummyResult()
         return DummyResult()
 
     monkeypatch.setenv("RCLONE_LOCAL_DIRECTORIES", str(tmp_path))
@@ -522,29 +569,57 @@ def test_update_rclone_remote_failure_restores_backup(monkeypatch, app, tmp_path
     assert resp.get_json() == {"error": "boom"}
 
     config_path = os.getenv("RCLONE_CONFIG")
-    backup_name = commands[1][6]
     assert commands[0] == ["rclone", "--config", config_path, "listremotes"]
-    assert commands[1][:6] == ["rclone", "--config", config_path, "config", "copy", "foo"]
-    assert commands[2] == ["rclone", "--config", config_path, "config", "delete", "foo"]
-    assert commands[3][3:7] == ["config", "create", "--non-interactive", "foo"]
-    assert commands[4] == ["rclone", "--config", config_path, "config", "delete", "foo"]
-    assert commands[5][:7] == [
+    initial_dump = commands[1]
+    assert initial_dump[:5] == ["rclone", "--config", config_path, "config", "dump"]
+    backup_create_cmd = next(
+        cmd
+        for cmd in commands
+        if len(cmd) >= 8
+        and cmd[3] == "config"
+        and cmd[4] == "create"
+        and cmd[6].startswith("__backup__")
+    )
+    backup_name = backup_create_cmd[6]
+    assert backup_create_cmd[:8] == [
         "rclone",
         "--config",
         config_path,
         "config",
-        "copy",
+        "create",
+        "--non-interactive",
         backup_name,
+        "alias",
+    ]
+    delete_cmd = ["rclone", "--config", config_path, "config", "delete", "foo"]
+    assert delete_cmd in commands
+    failure_cmd = commands[4]
+    assert failure_cmd[3:9] == [
+        "config",
+        "create",
+        "--non-interactive",
         "foo",
+        "alias",
+        "remote",
     ]
-    assert commands[6] == [
-        "rclone",
-        "--config",
-        config_path,
-        "config",
-        "delete",
-        backup_name,
-    ]
+    restore_dump = next(
+        cmd
+        for cmd in commands
+        if cmd[:5] == ["rclone", "--config", config_path, "config", "dump"]
+        and cmd is not initial_dump
+    )
+    assert restore_dump[:5] == ["rclone", "--config", config_path, "config", "dump"]
+    assert commands.count(["rclone", "--config", config_path, "config", "delete", backup_name]) == 1
+    restore_create_cmd = next(
+        cmd
+        for cmd in commands
+        if len(cmd) >= 8
+        and cmd[3] == "config"
+        and cmd[4] == "create"
+        and cmd[6] == "foo"
+        and cmd is not failure_cmd
+    )
+    assert restore_create_cmd[7] == "alias"
     assert not (tmp_path / "foo").exists()
 
 
@@ -578,10 +653,29 @@ def test_delete_rclone_remote_success(monkeypatch, app):
             self.stdout = stdout
             self.stderr = stderr
 
+    config_entries = {
+        "foo": {"type": "drive", "token": "tok", "scope": "drive"},
+    }
+
     def fake_run(cmd, capture_output, text, check):
         commands.append(cmd)
         if cmd[-1] == "listremotes":
             return DummyResult(stdout="foo:\n")
+        if len(cmd) >= 5 and cmd[3] == "config" and cmd[4] == "dump":
+            return DummyResult(stdout=json.dumps(config_entries))
+        if len(cmd) >= 6 and cmd[3] == "config" and cmd[4] == "delete":
+            config_entries.pop(cmd[5], None)
+            return DummyResult()
+        if len(cmd) >= 8 and cmd[3] == "config" and cmd[4] == "create":
+            name = cmd[6]
+            remote_type = cmd[7]
+            options: dict[str, str] = {}
+            for idx in range(8, len(cmd), 2):
+                if idx + 1 >= len(cmd):
+                    break
+                options[cmd[idx]] = cmd[idx + 1]
+            config_entries[name] = {"type": remote_type, **options}
+            return DummyResult()
         return DummyResult()
 
     from orchestrator.app import SessionLocal
@@ -600,13 +694,30 @@ def test_delete_rclone_remote_success(monkeypatch, app):
 
     config_path = os.getenv("RCLONE_CONFIG")
     assert commands[0] == ["rclone", "--config", config_path, "listremotes"]
-    assert commands[1][:6] == ["rclone", "--config", config_path, "config", "copy", "foo"]
-    backup_name = commands[1][6]
-    assert commands[2][:4] == ["rclone", "--config", config_path, "moveto"]
-    assert commands[3] == ["rclone", "--config", config_path, "config", "delete", "foo"]
-    assert commands[4][:3] == ["rclone", "--config", config_path]
-    assert commands[4][3] == "purge"
-    assert commands[5] == ["rclone", "--config", config_path, "config", "delete", backup_name]
+    dump_cmd = commands[1]
+    assert dump_cmd[:5] == ["rclone", "--config", config_path, "config", "dump"]
+    backup_create_cmd = next(
+        cmd
+        for cmd in commands
+        if len(cmd) >= 8
+        and cmd[3] == "config"
+        and cmd[4] == "create"
+        and cmd[6].startswith("__delete__")
+    )
+    backup_name = backup_create_cmd[6]
+    assert backup_create_cmd[7] == "drive"
+    assert ["rclone", "--config", config_path, "moveto"] in [cmd[:4] for cmd in commands]
+    assert ["rclone", "--config", config_path, "config", "delete", "foo"] in commands
+    purge_cmd = next(cmd for cmd in commands if len(cmd) >= 4 and cmd[3] == "purge")
+    assert purge_cmd[:3] == ["rclone", "--config", config_path]
+    assert [
+        "rclone",
+        "--config",
+        config_path,
+        "config",
+        "delete",
+        backup_name,
+    ] in commands
 
     with SessionLocal() as db:
         assert db.query(RcloneRemote).filter_by(name="foo").count() == 0
@@ -620,15 +731,35 @@ def test_delete_rclone_remote_local_removes_folder(monkeypatch, app, tmp_path):
             self.stdout = stdout
             self.stderr = stderr
 
+    config_entries = {
+        "foo": {"type": "alias", "remote": ""},
+    }
+
     def fake_run(cmd, capture_output, text, check):
         commands.append(cmd)
         if cmd[-1] == "listremotes":
             return DummyResult(stdout="foo:\n")
+        if len(cmd) >= 5 and cmd[3] == "config" and cmd[4] == "dump":
+            return DummyResult(stdout=json.dumps(config_entries))
+        if len(cmd) >= 6 and cmd[3] == "config" and cmd[4] == "delete":
+            config_entries.pop(cmd[5], None)
+            return DummyResult()
+        if len(cmd) >= 8 and cmd[3] == "config" and cmd[4] == "create":
+            name = cmd[6]
+            remote_type = cmd[7]
+            options: dict[str, str] = {}
+            for idx in range(8, len(cmd), 2):
+                if idx + 1 >= len(cmd):
+                    break
+                options[cmd[idx]] = cmd[idx + 1]
+            config_entries[name] = {"type": remote_type, **options}
+            return DummyResult()
         return DummyResult()
 
     base_folder = tmp_path
     remote_folder = base_folder / "foo"
     remote_folder.mkdir()
+    config_entries["foo"]["remote"] = str(remote_folder)
     monkeypatch.setenv("RCLONE_LOCAL_DIRECTORIES", str(base_folder))
     monkeypatch.setattr(subprocess, "run", fake_run)
 
@@ -662,11 +793,26 @@ def test_delete_rclone_remote_local_removes_folder(monkeypatch, app, tmp_path):
 
     config_path = os.getenv("RCLONE_CONFIG")
     assert commands[0] == ["rclone", "--config", config_path, "listremotes"]
-    copy_cmd = commands[1]
-    assert copy_cmd[:6] == ["rclone", "--config", config_path, "config", "copy", "foo"]
-    backup_name = copy_cmd[6]
-    assert commands[2] == ["rclone", "--config", config_path, "config", "delete", "foo"]
-    assert commands[3] == ["rclone", "--config", config_path, "config", "delete", backup_name]
+    dump_cmd = commands[1]
+    assert dump_cmd[:5] == ["rclone", "--config", config_path, "config", "dump"]
+    backup_create_cmd = next(
+        cmd
+        for cmd in commands
+        if len(cmd) >= 8
+        and cmd[3] == "config"
+        and cmd[4] == "create"
+        and cmd[6].startswith("__delete__")
+    )
+    backup_name = backup_create_cmd[6]
+    assert ["rclone", "--config", config_path, "config", "delete", "foo"] in commands
+    assert [
+        "rclone",
+        "--config",
+        config_path,
+        "config",
+        "delete",
+        backup_name,
+    ] in commands
 
     assert not remote_folder.exists()
 
