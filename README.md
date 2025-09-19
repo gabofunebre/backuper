@@ -53,8 +53,12 @@ contenedor.
 El orquestador guarda su configuración en una base SQLite (o en la base que
 indique `DATABASE_URL`). Allí se almacenan las aplicaciones registradas, sus
 programaciones y también los metadatos de cada remote configurado (tipo, ruta
-de destino, enlace compartido, etc.). De esta manera, toda la información sigue
-disponible aunque el contenedor se reinicie o se vuelva a construir.
+de destino, enlace compartido, etc.). Por defecto, la base se crea en
+`./datosPersistentes/db/apps.db`, que es el directorio montado como
+`/datosPersistentes/db` dentro del contenedor según el `docker-compose`. Al
+usarse un bind mount, Docker no reemplaza ese archivo al reiniciar el servicio:
+la configuración permanece disponible aunque el contenedor se reinicie o se
+vuelva a construir. Si no existe, se genera automáticamente en esa misma ruta.
 
 ## 3) Variables (.env)
 Crear un archivo `.env` en la raíz:
