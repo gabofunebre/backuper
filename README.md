@@ -32,11 +32,10 @@ backup-orchestrator/
    └─ app/            # código del orquestador (UI + scheduler + runner)
 ```
 
-### ¿Para qué usamos el volumen `backups`?
+### ¿Cómo se montan las carpetas locales?
 
-El servicio define un volumen Docker llamado `backups` que se monta dentro del
-contenedor en la ruta `/backups`. Ese espacio queda disponible para compartir
-archivos temporales entre el orquestador y las apps que exportan sus datos.
+El servicio monta la carpeta indicada por la variable `RCLONE_LOCAL_DIRECTORIES`
+
 
 Además podés exponer carpetas locales mediante la variable
 `RCLONE_LOCAL_DIRECTORIES`. Cada entrada se monta como **bind mount** dentro del
@@ -46,6 +45,7 @@ contenedor en la misma ruta que en el host. Por ejemplo,
 misma ruta (`/home/usuario/backups`). La UI mostrará el label opcional
 (`Respaldos`) como descripción para crear remotes de tipo **Local**. Al tratarse
 de bind mounts, los archivos quedan accesibles fuera del contenedor.
+
 
 ### ¿Para qué usamos la base de datos?
 
@@ -80,6 +80,7 @@ RCLONE_DRIVE_CLIENT_SECRET=tu-client-secret
 RCLONE_DRIVE_TOKEN={"access_token": "...", "refresh_token": "..."}
 # Carpetas locales disponibles en la UI (separá con `;`, `,` o salto de línea)
 RCLONE_LOCAL_DIRECTORIES=Respaldos|/home/usuario/backups
+
 # Opcional: ajustá el scope y los permisos de compartición
 # RCLONE_DRIVE_SCOPE=drive
 # RCLONE_DRIVE_SHARE_TYPE=user
@@ -103,6 +104,7 @@ línea. Cada entrada puede incluir un label opcional seguido de `|` (por ejemplo
 encerrarla entre comillas. El contenedor verá cada carpeta exactamente en la
 misma ruta que en el host, por lo que los remotes locales creados desde la UI
 apuntan directamente a esas ubicaciones compartidas.
+
 
 > El **remote** `gdrive` se configura una sola vez y vive en `./rcloneConfig` (montado en `/config/rclone` dentro del contenedor).
 > Como es un bind mount del host, Docker no lo recrea ni lo pisa cuando corrés `docker compose down` seguido de `docker compose up`: la carpeta y el archivo `rclone.conf` quedan en tu disco.
