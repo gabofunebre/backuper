@@ -204,7 +204,7 @@ def test_create_sftp_remote_success(monkeypatch):
     }
     resp = client.post("/rclone/remotes", json=payload)
     assert resp.status_code == 201
-    assert resp.get_json() == {"status": "ok"}
+    assert resp.get_json() == {"status": "ok", "share_url": "/srv/backups"}
     assert len(calls) == 3
     create_cmd = calls[0]["cmd"]
     assert create_cmd[0] == "rclone"

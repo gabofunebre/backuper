@@ -636,6 +636,7 @@ def create_app() -> Flask:
                     "error": "Seleccioná la carpeta del servidor SFTP donde se crearán los respaldos.",
                 }, 400
             normalized_base = _normalize_sftp_base_path(base_path)
+            share_url = normalized_base
             try:
                 target_path = _join_sftp_folder(normalized_base, name)
             except ValueError:
