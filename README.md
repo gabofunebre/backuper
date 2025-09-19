@@ -26,6 +26,7 @@ Orquestador liviano que:
 backup-orchestrator/
 ├─ docker-compose.yml
 ├─ .env                # variables del orquestador
+├─ rcloneConfig/       # configuración persistente de rclone
 └─ orchestrator/
    ├─ Dockerfile       # imagen con app + rclone
    └─ app/            # código del orquestador (UI + scheduler + runner)
@@ -51,9 +52,11 @@ RCLONE_REMOTE=gdrive
 # Cada app elige su carpeta destino; el orquestador guarda el folderId por app
 ```
 
-> El **remote** `gdrive` se configura una sola vez y vive en el volumen `rclone_config`.
+> El **remote** `gdrive` se configura una sola vez y vive en `./rcloneConfig` (montado en `/config/rclone` dentro del contenedor).
+> Como es un bind mount del host, Docker no lo recrea ni lo pisa cuando corrés `docker compose down` seguido de `docker compose up`: la carpeta y el archivo `rclone.conf` quedan en tu disco.
 
 ## 4) Primer arranque
+El `docker-compose` monta `./rcloneConfig` dentro del contenedor para conservar la configuración de rclone entre reinicios. La carpeta se crea automáticamente al levantar los servicios (o podés crearla manualmente con `mkdir -p rcloneConfig`). Mientras no borres esa carpeta en el host (o elimines su contenido), cualquier recreación del contenedor volverá a usar exactamente la misma configuración.
 ```bash
 docker compose up -d --build
 ```
@@ -75,7 +78,7 @@ docker exec -it backup-orchestrator rclone lsd gdrive:
 Si preferís evitar la consola, la interfaz web incluye una sección para inicializar y ver los remotes de rclone.
 - Ingresá a **Rclone → Configurar** desde la UI.
 - Allí se ejecuta el asistente `rclone config` y podés listar los remotes disponibles (`/rclone/remotes`).
-- La configuración se guarda en el volumen `rclone_config`.
+- La configuración se guarda en `./rcloneConfig`, por lo que no se pierde al reiniciar el contenedor.
 
 ## 7) Contrato v1 para las Apps
 Cada app que quiera respaldo debe conectarse a `backups_net` y exponer los
