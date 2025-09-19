@@ -122,10 +122,12 @@ def test_drive_validate_requires_token(monkeypatch):
     assert resp.get_json() == {"error": "token is required"}
 
 
-def test_create_local_remote(monkeypatch):
+def test_create_local_remote(monkeypatch, tmp_path):
+    base_dir = tmp_path / "backups"
+    base_dir.mkdir()
     app, app_module = make_app(
         monkeypatch,
-        RCLONE_LOCAL_DIRECTORIES="Backups|/data/backups",
+        RCLONE_LOCAL_DIRECTORIES=f"Backups|{base_dir}",
     )
     recorded: dict[str, object] = {}
 
@@ -140,22 +142,24 @@ def test_create_local_remote(monkeypatch):
     payload = {
         "name": "local1",
         "type": "local",
-        "settings": {"path": "/data/backups"},
+        "settings": {"path": str(base_dir)},
     }
     resp = client.post("/rclone/remotes", json=payload)
     assert resp.status_code == 201
-    assert resp.get_json() == {
-        "status": "ok",
-        "route": "/data/backups",
-        "share_url": "/data/backups",
-    }
+    data = resp.get_json()
+    assert data["status"] == "ok"
+    assert data["name"] == "local1"
+    expected_path = base_dir / "local1"
+    assert data["route"] == str(expected_path)
+    assert data["share_url"] == str(expected_path)
+    assert "id" in data and isinstance(data["id"], int)
     cmd = recorded["cmd"]
     assert cmd[:3] == ["rclone", "--config", "/tmp/test-rclone.conf"]
     assert "--non-interactive" in cmd
     assert "alias" in cmd
     alias_index = cmd.index("alias")
     assert cmd[alias_index + 1] == "remote"
-    assert cmd[alias_index + 2] == "/data/backups"
+    assert cmd[alias_index + 2] == str(expected_path)
 
 
 def test_create_local_remote_invalid_path(monkeypatch):
@@ -163,11 +167,10 @@ def test_create_local_remote_invalid_path(monkeypatch):
         monkeypatch,
         RCLONE_LOCAL_DIRECTORIES="Backups|/data/backups",
     )
-    called = False
+    commands: list[list[str]] = []
 
     def fake_run(cmd, **kwargs):
-        nonlocal called
-        called = True
+        commands.append(cmd)
         return SimpleNamespace(stdout="", stderr="")
 
     monkeypatch.setattr(app_module.subprocess, "run", fake_run)
@@ -181,7 +184,8 @@ def test_create_local_remote_invalid_path(monkeypatch):
     resp = client.post("/rclone/remotes", json=payload)
     assert resp.status_code == 400
     assert resp.get_json() == {"error": "invalid path"}
-    assert called is False
+    config_path = "/tmp/test-rclone.conf"
+    assert commands == [["rclone", "--config", config_path, "listremotes"]]
 
 
 def test_create_sftp_remote_success(monkeypatch):
@@ -210,14 +214,22 @@ def test_create_sftp_remote_success(monkeypatch):
     }
     resp = client.post("/rclone/remotes", json=payload)
     assert resp.status_code == 201
-    assert resp.get_json() == {
-        "status": "ok",
-        "route": "/srv/backups",
-        "share_url": "/srv/backups",
-    }
-    assert len(calls) == 4
-    obscure_cmd = calls[0]["cmd"]
-    create_cmd = calls[1]["cmd"]
+    data = resp.get_json()
+    assert data["status"] == "ok"
+    assert data["name"] == "sftp1"
+    assert data["route"] == "/srv/backups"
+    assert data["share_url"] == "/srv/backups"
+    assert "id" in data and isinstance(data["id"], int)
+
+    config_path = "/tmp/test-rclone.conf"
+    list_cmds = [call["cmd"] for call in calls if call["cmd"][-1] == "listremotes"]
+    assert list_cmds == [["rclone", "--config", config_path, "listremotes"]]
+    obscure_cmd = next(call["cmd"] for call in calls if "obscure" in call["cmd"])
+    create_cmd = next(
+        call["cmd"]
+        for call in calls
+        if call["cmd"][3:7] == ["config", "create", "--non-interactive", "sftp1"]
+    )
     assert obscure_cmd[0] == "rclone"
     assert "obscure" in obscure_cmd
     assert obscure_cmd[-1] == "secret"
@@ -230,19 +242,16 @@ def test_create_sftp_remote_success(monkeypatch):
     assert "port" in create_cmd and create_cmd[create_cmd.index("port") + 1] == "2222"
     path_index = create_cmd.index("path")
     assert create_cmd[path_index + 1] == "/srv/backups/sftp1"
-    mkdir_cmd = calls[2]["cmd"]
-    assert mkdir_cmd[-2:] == ["mkdir", "sftp1:"]
-    lsd_cmd = calls[3]["cmd"]
-    assert lsd_cmd[-2:] == ["lsd", "sftp1:"]
+    mkdir_cmd = next(call["cmd"] for call in calls if call["cmd"][3:] == ["mkdir", "sftp1:"])
+    lsd_cmd = next(call["cmd"] for call in calls if call["cmd"][3:] == ["lsd", "sftp1:"])
 
 
 def test_create_sftp_remote_missing_credentials(monkeypatch):
     app, app_module = make_app(monkeypatch)
-    called = False
+    commands: list[list[str]] = []
 
     def fake_run(cmd, **kwargs):
-        nonlocal called
-        called = True
+        commands.append(cmd)
         return SimpleNamespace(stdout="", stderr="")
 
     monkeypatch.setattr(app_module.subprocess, "run", fake_run)
@@ -259,16 +268,16 @@ def test_create_sftp_remote_missing_credentials(monkeypatch):
     resp = client.post("/rclone/remotes", json=payload)
     assert resp.status_code == 400
     assert resp.get_json() == {"error": "password is required"}
-    assert called is False
+    config_path = "/tmp/test-rclone.conf"
+    assert commands == [["rclone", "--config", config_path, "listremotes"]]
 
 
 def test_create_sftp_remote_invalid_port(monkeypatch):
     app, app_module = make_app(monkeypatch)
-    called = False
+    commands: list[list[str]] = []
 
     def fake_run(cmd, **kwargs):
-        nonlocal called
-        called = True
+        commands.append(cmd)
         return SimpleNamespace(stdout="", stderr="")
 
     monkeypatch.setattr(app_module.subprocess, "run", fake_run)
@@ -287,7 +296,8 @@ def test_create_sftp_remote_invalid_port(monkeypatch):
     resp = client.post("/rclone/remotes", json=payload)
     assert resp.status_code == 400
     assert resp.get_json() == {"error": "invalid port"}
-    assert called is False
+    config_path = "/tmp/test-rclone.conf"
+    assert commands == [["rclone", "--config", config_path, "listremotes"]]
 
 
 def test_create_sftp_remote_connection_failure(monkeypatch):
@@ -323,4 +333,6 @@ def test_create_sftp_remote_connection_failure(monkeypatch):
         "error": "No se pudo autenticar en el servidor SFTP. Verificá el usuario y la contraseña.",
     }
     # Ensure cleanup attempted after failure
+    config_path = "/tmp/test-rclone.conf"
+    assert any(cmd == ["rclone", "--config", config_path, "listremotes"] for cmd in calls)
     assert any(cmd[-3:-1] == ["config", "delete"] for cmd in calls)

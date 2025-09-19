@@ -1,3 +1,4 @@
+import datetime
 import json
 import os
 import posixpath
@@ -61,6 +62,14 @@ def create_app() -> Flask:
             conn.execute(text("ALTER TABLE apps ADD COLUMN rclone_remote VARCHAR"))
         if "retention" not in columns:
             conn.execute(text("ALTER TABLE apps ADD COLUMN retention INTEGER"))
+    remote_columns = [col["name"] for col in inspector.get_columns("rclone_remotes")]
+    with engine.begin() as conn:
+        if "route" not in remote_columns:
+            conn.execute(text("ALTER TABLE rclone_remotes ADD COLUMN route VARCHAR"))
+        if "share_url" not in remote_columns:
+            conn.execute(text("ALTER TABLE rclone_remotes ADD COLUMN share_url VARCHAR"))
+        if "created_at" not in remote_columns:
+            conn.execute(text("ALTER TABLE rclone_remotes ADD COLUMN created_at DATETIME"))
     start_scheduler()
 
     @dataclass
@@ -72,6 +81,8 @@ def create_app() -> Flask:
         error_translator: Callable[[str], str] | None = None
         drive_mode: str | None = None
         drive_remote_path: str | None = None
+        drive_current_path: str | None = None
+        drive_requires_creation: bool = False
         share_url: str | None = None
         local_target_path: str | None = None
         local_source_path: str | None = None
@@ -197,6 +208,132 @@ def create_app() -> Flask:
             return ""
         return _normalize_remote(cleaned).rstrip(":")
 
+    def _normalize_drive_folder_name(value: str | None) -> str:
+        cleaned = (value or "").strip()
+        if not cleaned:
+            return ""
+        cleaned = cleaned.replace(":", " ")
+        cleaned = cleaned.replace("\\", "/")
+        return cleaned.strip().strip("/")
+
+    def _normalize_drive_path(path: str | None) -> str:
+        candidate = (path or "").strip()
+        if not candidate:
+            return ""
+        candidate = candidate.replace("\\", "/")
+        remote, sep, suffix = candidate.partition(":")
+        if not sep:
+            base_remote = _normalize_remote(os.getenv("RCLONE_REMOTE", "gdrive"))
+            cleaned_suffix = candidate.strip("/")
+            if cleaned_suffix:
+                return f"{base_remote}{cleaned_suffix}"
+            return base_remote
+        normalized_remote = _normalize_remote(remote)
+        cleaned_suffix = suffix.strip().strip("/")
+        if cleaned_suffix:
+            return f"{normalized_remote}{cleaned_suffix}"
+        return normalized_remote
+
+    def _collect_drive_root_entries(remote: str) -> set[str]:
+        entries: set[str] = set()
+        base_args = ["lsf", remote, "--max-depth", "1"]
+        for flag in ("--dir-only", "--files-only"):
+            try:
+                result = run_rclone(
+                    [*base_args, flag], capture_output=True, text=True, check=True
+                )
+            except subprocess.CalledProcessError as exc:
+                message = (exc.stderr or exc.stdout or "").strip()
+                detail = (
+                    message
+                    or "No se pudo verificar si la carpeta ya existe en Google Drive."
+                )
+                raise RemoteOperationError(detail) from exc
+            for raw in (result.stdout or "").splitlines():
+                item = raw.strip().rstrip("/")
+                if item:
+                    entries.add(item.lower())
+        return entries
+
+    def _ensure_drive_folder_available(
+        base_remote: str,
+        folder_name: str,
+        current_path: str | None = None,
+    ) -> None:
+        normalized_base = _normalize_remote(base_remote.rstrip(":"))
+        normalized_name = _normalize_drive_folder_name(folder_name)
+        if not normalized_name:
+            raise RemoteOperationError("El nombre de la carpeta es obligatorio.")
+        target_path = _normalize_drive_path(f"{normalized_base}{normalized_name}")
+        current_normalized = _normalize_drive_path(current_path)
+        if current_normalized and current_normalized == target_path:
+            return
+        existing = _collect_drive_root_entries(normalized_base)
+        if normalized_name.lower() in existing:
+            raise RemoteOperationError(
+                "Ya existe una carpeta o archivo con ese nombre en Google Drive. "
+                "Elegí otro nombre."
+            )
+
+    def _build_drive_temp_path(path: str) -> str:
+        normalized = _normalize_drive_path(path)
+        remote, sep, _ = normalized.partition(":")
+        if not sep:
+            raise ValueError("invalid drive path")
+        base_remote = _normalize_remote(remote)
+        return f"{base_remote}__rollback__{uuid.uuid4().hex[:8]}"
+
+    def _move_drive_path(source: str, target: str) -> None:
+        try:
+            run_rclone(
+                ["moveto", source, target],
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+        except subprocess.CalledProcessError as exc:
+            message = (exc.stderr or exc.stdout or "").strip()
+            detail = (
+                message
+                or "No se pudo actualizar la carpeta en Google Drive. Intentá con otro nombre."
+            )
+            raise RemoteOperationError(detail) from exc
+
+    def _restore_drive_path(source: str, target: str) -> str | None:
+        try:
+            run_rclone(
+                ["moveto", source, target],
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+        except subprocess.CalledProcessError as exc:
+            message = (exc.stderr or exc.stdout or "").strip()
+            detail = (
+                message
+                or "No se pudo restaurar la carpeta original en Google Drive."
+            )
+            return detail
+        except RemoteOperationError as exc:
+            return str(exc)
+        return None
+
+    def _purge_drive_path(target: str) -> None:
+        try:
+            run_rclone(
+                ["purge", target],
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+        except subprocess.CalledProcessError as exc:
+            message = (exc.stderr or exc.stdout or "").strip()
+            detail = (
+                message
+                or "No se pudo eliminar la carpeta de Google Drive asociada al remote."
+            )
+            raise RemoteOperationError(detail) from exc
+
     def _normalize_sftp_base_path(value: str | None) -> str:
         candidate = (value or "/").strip()
         if not candidate or candidate in {".", "./"}:
@@ -267,12 +404,25 @@ def create_app() -> Flask:
                 raise RemoteOperationError("invalid drive mode")
             if mode == "shared":
                 base_remote = _normalize_remote(os.getenv("RCLONE_REMOTE", "gdrive"))
-                folder_name = (settings.get("folder_name") or name or "").strip()
+                folder_name = _normalize_drive_folder_name(
+                    settings.get("folder_name") or name or ""
+                )
                 if not folder_name:
                     raise RemoteOperationError("folder name is required")
-                drive_remote_path = f"{base_remote}{folder_name}"
+                drive_remote_path = _normalize_drive_path(
+                    f"{base_remote}{folder_name}"
+                )
+                current_drive_path = _normalize_drive_path(current_remote_route)
                 ensure_default_drive_remote()
-                plan.pre_commands.append(["mkdir", drive_remote_path])
+                if drive_remote_path != current_drive_path:
+                    _ensure_drive_folder_available(
+                        base_remote, folder_name, current_drive_path
+                    )
+                    plan.pre_commands.append(["mkdir", drive_remote_path])
+                    plan.drive_requires_creation = True
+                else:
+                    plan.drive_requires_creation = False
+                plan.drive_current_path = current_drive_path or None
                 plan.command = [
                     *base_args,
                     "alias",
@@ -483,6 +633,7 @@ def create_app() -> Flask:
                         pass
                 raise RemoteOperationError(str(exc), 500) from exc
 
+        plan.share_url = share_url
         return share_url
 
     def _restore_remote_backup(remote_name: str, backup_name: str) -> bool:
@@ -749,25 +900,34 @@ def create_app() -> Flask:
         """Return available rclone remotes with stored metadata."""
 
         try:
-            remotes = fetch_configured_remotes()
+            configured = set(fetch_configured_remotes())
         except RuntimeError:
             return {"error": "rclone is not installed"}, 500
 
-        with SessionLocal() as db:
-            stored = {remote.name: remote for remote in db.query(RcloneRemote).all()}
-
         entries: list[dict[str, str]] = []
-        for remote_name in remotes:
-            item: dict[str, str] = {"name": remote_name}
-            stored_remote = stored.get(remote_name)
-            if stored_remote:
-                if stored_remote.type:
-                    item["type"] = stored_remote.type
-                route = (stored_remote.route or "").strip()
-                if route:
-                    item["route"] = route
-                    item["share_url"] = route
-            entries.append(item)
+        with SessionLocal() as db:
+            for remote in db.query(RcloneRemote).all():
+                if remote.name not in configured:
+                    continue
+                item: dict[str, str] = {"name": remote.name}
+                if remote.id is not None:
+                    item["id"] = remote.id
+                if remote.type:
+                    item["type"] = remote.type
+                route_value = (remote.route or "").strip()
+                if route_value:
+                    item["route"] = route_value
+                share_value = (remote.share_url or "").strip()
+                if share_value:
+                    item["share_url"] = share_value
+                if remote.created_at:
+                    try:
+                        item["created_at"] = remote.created_at.isoformat()
+                    except AttributeError:
+                        pass
+                entries.append(item)
+
+        entries.sort(key=lambda entry: entry["name"].lower())
         return jsonify(entries)
 
     @app.get("/rclone/remotes/options/<remote_type>")
@@ -956,6 +1116,19 @@ def create_app() -> Flask:
             return {"error": "unsupported remote type"}, 400
 
         settings = data.get("settings") or {}
+
+        try:
+            configured = set(fetch_configured_remotes())
+        except RuntimeError:
+            return {"error": "rclone is not installed"}, 500
+        if name in configured:
+            return {"error": "Ya existe un remote con ese nombre."}, 400
+
+        with SessionLocal() as db:
+            conflict = db.query(RcloneRemote).filter_by(name=name).one_or_none()
+            if conflict:
+                return {"error": "Ya existe un remote con ese nombre."}, 400
+
         try:
             plan = _build_remote_plan(name, remote_type, settings)
         except RemoteOperationError as exc:
@@ -983,22 +1156,28 @@ def create_app() -> Flask:
                 shutil.rmtree(local_created_path, ignore_errors=True)
             return {"error": "rclone is not installed"}, 500
 
-        with SessionLocal() as db:
-            existing = db.query(RcloneRemote).filter_by(name=name).one_or_none()
-            if existing:
-                existing.type = remote_type
-                existing.route = share_url
-            else:
-                db.add(
-                    RcloneRemote(
-                        name=name,
-                        type=remote_type,
-                        route=share_url,
-                    )
-                )
-            db.commit()
+        route_value = (
+            getattr(plan, "drive_remote_path", None)
+            or getattr(plan, "local_target_path", None)
+            or (plan.share_url or None)
+            or share_url
+        )
 
-        response = {"status": "ok", "route": share_url}
+        with SessionLocal() as db:
+            new_remote = RcloneRemote(
+                name=name,
+                type=remote_type,
+                route=(route_value or None),
+                share_url=(share_url or None),
+                created_at=datetime.datetime.utcnow(),
+            )
+            db.add(new_remote)
+            db.commit()
+            db.refresh(new_remote)
+
+        response: dict[str, str] = {"status": "ok", "name": name, "id": new_remote.id}
+        if route_value:
+            response["route"] = route_value
         if share_url:
             response["share_url"] = share_url
         return response, 201
@@ -1054,6 +1233,12 @@ def create_app() -> Flask:
             return {"error": str(exc)}, exc.status_code
         except DefaultDriveRemoteError as exc:
             return {"error": str(exc)}, 500
+
+        drive_current_path = _normalize_drive_path(stored_route)
+        drive_target_path = _normalize_drive_path(getattr(plan, "drive_remote_path", None))
+        drive_mode = getattr(plan, "drive_mode", None)
+        drive_renamed = False
+        drive_original_path_for_rollback = drive_current_path or None
 
         allowed_roots = _get_local_directory_roots()
         local_target_path = getattr(plan, "local_target_path", None)
@@ -1150,6 +1335,68 @@ def create_app() -> Flask:
                         return {"error": _format_local_error("crear", local_target_path, exc)}, 400
                     created_local_path = local_target_path
 
+            if remote_type == "drive" and drive_mode == "shared":
+                if not drive_target_path:
+                    revert_errors = _rollback_local_changes(
+                        move_mode,
+                        local_target_path,
+                        move_contents_source if move_mode == "move_contents" else renamed_source_path,
+                        moved_entries,
+                        created_local_path,
+                    )
+                    _delete_remote_safely(backup_name)
+                    message = (
+                        "No se pudo determinar la carpeta destino en Google Drive para actualizar el remote."
+                    )
+                    if revert_errors:
+                        message = f"{message} {' '.join(revert_errors)}"
+                    return {"error": message}, 400
+                if not drive_current_path:
+                    revert_errors = _rollback_local_changes(
+                        move_mode,
+                        local_target_path,
+                        move_contents_source if move_mode == "move_contents" else renamed_source_path,
+                        moved_entries,
+                        created_local_path,
+                    )
+                    _delete_remote_safely(backup_name)
+                    message = (
+                        "No se encontró la carpeta actual del remote en Google Drive. "
+                        "Verificá que siga existiendo antes de cambiar el nombre."
+                    )
+                    if revert_errors:
+                        message = f"{message} {' '.join(revert_errors)}"
+                    return {"error": message}, 400
+                normalized_target = _normalize_drive_path(drive_target_path)
+                normalized_current = _normalize_drive_path(drive_current_path)
+                if normalized_target and normalized_current and normalized_target != normalized_current:
+                    plan.pre_commands = [
+                        cmd
+                        for cmd in plan.pre_commands
+                        if not (
+                            len(cmd) >= 2
+                            and cmd[0] == "mkdir"
+                            and _normalize_drive_path(cmd[1]) == normalized_target
+                        )
+                    ]
+                    try:
+                        _move_drive_path(normalized_current, normalized_target)
+                    except RemoteOperationError as exc:
+                        revert_errors = _rollback_local_changes(
+                            move_mode,
+                            local_target_path,
+                            move_contents_source if move_mode == "move_contents" else renamed_source_path,
+                            moved_entries,
+                            created_local_path,
+                        )
+                        _delete_remote_safely(backup_name)
+                        message = str(exc)
+                        if revert_errors:
+                            message = f"{message} {' '.join(revert_errors)}"
+                        return {"error": message}, 400
+                    drive_renamed = True
+                    drive_current_path = normalized_target
+
             run_rclone(
                 ["config", "delete", normalized_name],
                 capture_output=True,
@@ -1166,6 +1413,14 @@ def create_app() -> Flask:
             )
             _delete_remote_safely(backup_name)
             message = "rclone is not installed"
+            if drive_renamed and drive_current_path and drive_original_path_for_rollback:
+                restore_error = _restore_drive_path(
+                    drive_current_path, drive_original_path_for_rollback
+                )
+                if restore_error:
+                    message = f"{message} {restore_error}".strip()
+                else:
+                    drive_renamed = False
             if revert_errors:
                 message = f"{message} {' '.join(revert_errors)}"
             return {"error": message}, 500
@@ -1179,6 +1434,14 @@ def create_app() -> Flask:
             )
             _delete_remote_safely(backup_name)
             message = (exc.stderr or exc.stdout or "").strip() or "No se pudo reemplazar el remote."
+            if drive_renamed and drive_current_path and drive_original_path_for_rollback:
+                restore_error = _restore_drive_path(
+                    drive_current_path, drive_original_path_for_rollback
+                )
+                if restore_error:
+                    message = f"{message} {restore_error}".strip()
+                else:
+                    drive_renamed = False
             if revert_errors:
                 message = f"{message} {' '.join(revert_errors)}"
             return {"error": message}, 400
@@ -1194,9 +1457,18 @@ def create_app() -> Flask:
                 moved_entries,
                 created_local_path,
             )
+            drive_restore_error: str | None = None
+            if drive_renamed and drive_current_path and drive_original_path_for_rollback:
+                drive_restore_error = _restore_drive_path(
+                    drive_current_path, drive_original_path_for_rollback
+                )
+                if not drive_restore_error:
+                    drive_renamed = False
             restored = _restore_remote_backup(normalized_name, backup_name)
             _delete_remote_safely(backup_name)
             message = str(exc)
+            if drive_restore_error:
+                message = f"{message} {drive_restore_error}".strip()
             if revert_errors:
                 message = f"{message} {' '.join(revert_errors)}"
             if not restored:
@@ -1212,9 +1484,18 @@ def create_app() -> Flask:
                 moved_entries,
                 created_local_path,
             )
+            drive_restore_error: str | None = None
+            if drive_renamed and drive_current_path and drive_original_path_for_rollback:
+                drive_restore_error = _restore_drive_path(
+                    drive_current_path, drive_original_path_for_rollback
+                )
+                if not drive_restore_error:
+                    drive_renamed = False
             restored = _restore_remote_backup(normalized_name, backup_name)
             _delete_remote_safely(backup_name)
             message = "rclone is not installed"
+            if drive_restore_error:
+                message = f"{message} {drive_restore_error}".strip()
             if revert_errors:
                 message = f"{message} {' '.join(revert_errors)}"
             if not restored:
@@ -1227,6 +1508,12 @@ def create_app() -> Flask:
 
         normalized_old_remote = _normalize_remote(normalized_name)
         normalized_new_remote = _normalize_remote(target_name)
+        route_value = (
+            getattr(plan, "drive_remote_path", None)
+            or getattr(plan, "local_target_path", None)
+            or (plan.share_url or None)
+            or share_url
+        )
         with SessionLocal() as db:
             existing = db.query(RcloneRemote).filter_by(name=normalized_name).one_or_none()
             conflict = None
@@ -1237,13 +1524,16 @@ def create_app() -> Flask:
             if existing:
                 existing.name = target_name
                 existing.type = remote_type
-                existing.route = share_url
+                existing.route = route_value
+                existing.share_url = share_url
             else:
                 db.add(
                     RcloneRemote(
                         name=target_name,
                         type=remote_type,
-                        route=share_url,
+                        route=(route_value or None),
+                        share_url=(share_url or None),
+                        created_at=datetime.datetime.utcnow(),
                     )
                 )
             if target_name != normalized_name:
@@ -1252,7 +1542,9 @@ def create_app() -> Flask:
                     app_obj.rclone_remote = normalized_new_remote
             db.commit()
 
-        response = {"status": "ok", "route": share_url, "name": target_name}
+        response: dict[str, str] = {"status": "ok", "name": target_name}
+        if route_value:
+            response["route"] = route_value
         if share_url:
             response["share_url"] = share_url
         return response, 200
@@ -1273,6 +1565,7 @@ def create_app() -> Flask:
             if stored_remote:
                 stored_type = (stored_remote.type or "").strip().lower() or None
                 stored_route = (stored_remote.route or "").strip() or None
+        drive_current_path = _normalize_drive_path(stored_route) if stored_type == "drive" else ""
 
         try:
             configured = fetch_configured_remotes()
@@ -1283,6 +1576,15 @@ def create_app() -> Flask:
 
         allowed_roots = _get_local_directory_roots()
         local_path_to_remove: str | None = None
+        drive_temp_path: str | None = None
+        drive_renamed = False
+        if stored_type == "drive" and not drive_current_path:
+            return {
+                "error": (
+                    "No se pudo identificar la carpeta de Google Drive asociada al remote. "
+                    "Actualizalo antes de eliminarlo o contactá al administrador."
+                )
+            }, 400
         if stored_type == "local" and stored_route:
             candidate = _ensure_absolute_path(stored_route)
             if candidate:
@@ -1305,7 +1607,8 @@ def create_app() -> Flask:
                     }, 400
 
         backup_name: str | None = None
-        if local_path_to_remove:
+        requires_backup = bool(local_path_to_remove) or (stored_type == "drive" and drive_current_path)
+        if requires_backup:
             backup_name = f"__delete__{uuid.uuid4().hex[:8]}"
             try:
                 run_rclone(
@@ -1322,6 +1625,15 @@ def create_app() -> Flask:
                 return {"error": message}, 400
 
         try:
+            if stored_type == "drive" and drive_current_path:
+                drive_temp_path = _build_drive_temp_path(drive_current_path)
+                try:
+                    _move_drive_path(drive_current_path, drive_temp_path)
+                except RemoteOperationError as exc:
+                    if backup_name:
+                        _delete_remote_safely(backup_name)
+                    return {"error": str(exc)}, 400
+                drive_renamed = True
             run_rclone(
                 ["config", "delete", normalized_name],
                 capture_output=True,
@@ -1329,14 +1641,52 @@ def create_app() -> Flask:
                 check=True,
             )
         except RuntimeError:
+            restore_error: str | None = None
+            if drive_renamed and drive_temp_path and drive_current_path:
+                restore_error = _restore_drive_path(drive_temp_path, drive_current_path)
             if backup_name:
                 _delete_remote_safely(backup_name)
-            return {"error": "rclone is not installed"}, 500
+            message = "rclone is not installed"
+            if restore_error:
+                message = f"{message} {restore_error}".strip()
+            return {"error": message}, 500
         except subprocess.CalledProcessError as exc:
-            message = (exc.stderr or exc.stdout or "").strip() or "failed to delete remote"
+            restore_error: str | None = None
+            if drive_renamed and drive_temp_path and drive_current_path:
+                restore_error = _restore_drive_path(drive_temp_path, drive_current_path)
             if backup_name:
                 _delete_remote_safely(backup_name)
+            message = (exc.stderr or exc.stdout or "").strip() or "failed to delete remote"
+            if restore_error:
+                message = f"{message} {restore_error}".strip()
             return {"error": message}, 400
+
+        if drive_renamed and drive_temp_path and drive_current_path:
+            purge_error: str | None = None
+            try:
+                _purge_drive_path(drive_temp_path)
+                drive_renamed = False
+                drive_temp_path = None
+            except RemoteOperationError as exc:
+                purge_error = str(exc)
+            if purge_error:
+                restore_error = _restore_drive_path(drive_temp_path, drive_current_path)
+                restored_config = False
+                if backup_name:
+                    restored_config = _restore_remote_backup(normalized_name, backup_name)
+                if backup_name:
+                    _delete_remote_safely(backup_name)
+                    backup_name = None
+                message = purge_error
+                if restore_error:
+                    message = f"{message} {restore_error}".strip()
+                if restored_config:
+                    return {
+                        "error": f"{message} La configuración original del remote se restauró.",
+                    }, 400
+                return {
+                    "error": f"{message} No se pudo restaurar la configuración original.",
+                }, 500
 
         removal_error: str | None = None
         if local_path_to_remove:

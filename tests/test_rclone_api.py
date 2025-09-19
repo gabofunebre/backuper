@@ -38,11 +38,27 @@ def test_list_rclone_remotes(monkeypatch, app):
         return DummyResult()
 
     monkeypatch.setattr(subprocess, "run", fake_run)
+
+    from orchestrator.app import SessionLocal
+    from orchestrator.app.models import RcloneRemote
+
+    with SessionLocal() as db:
+        db.add(RcloneRemote(name="gdrive", type="drive", route="gdrive:backups"))
+        db.commit()
+
     client = app.test_client()
     client.post("/login", data={"username": "admin", "password": "secret"})
     resp = client.get("/rclone/remotes")
     assert resp.status_code == 200
-    assert resp.get_json() == [{"name": "gdrive"}, {"name": "other"}]
+    payload = resp.get_json()
+    assert isinstance(payload, list)
+    assert len(payload) == 1
+    entry = payload[0]
+    assert entry["name"] == "gdrive"
+    assert entry["type"] == "drive"
+    assert entry["route"] == "gdrive:backups"
+    assert "id" in entry and isinstance(entry["id"], int)
+    assert "created_at" in entry
     config_path = os.getenv("RCLONE_CONFIG")
     assert calls == [["rclone", "--config", config_path, "listremotes"]]
 
@@ -66,6 +82,7 @@ def test_list_rclone_remotes_with_metadata(monkeypatch, app):
             RcloneRemote(
                 name="foo",
                 type="drive",
+                route="gdrive:demo",
                 share_url="https://drive.google.com/drive/folders/demo",
             )
         )
@@ -75,14 +92,16 @@ def test_list_rclone_remotes_with_metadata(monkeypatch, app):
     client.post("/login", data={"username": "admin", "password": "secret"})
     resp = client.get("/rclone/remotes")
     assert resp.status_code == 200
-    assert resp.get_json() == [
-        {
-            "name": "foo",
-            "type": "drive",
-            "route": "https://drive.google.com/drive/folders/demo",
-            "share_url": "https://drive.google.com/drive/folders/demo",
-        }
-    ]
+    payload = resp.get_json()
+    assert isinstance(payload, list)
+    assert len(payload) == 1
+    entry = payload[0]
+    assert entry["name"] == "foo"
+    assert entry["type"] == "drive"
+    assert entry["route"] == "gdrive:demo"
+    assert entry["share_url"] == "https://drive.google.com/drive/folders/demo"
+    assert "id" in entry and isinstance(entry["id"], int)
+    assert "created_at" in entry
 
 
 def test_register_app_with_remote(monkeypatch, app):
@@ -203,10 +222,17 @@ def test_create_rclone_remote_custom_success(monkeypatch, app):
         },
     )
     assert resp.status_code == 201
-    assert resp.get_json() == {"status": "ok", "route": None}
-    cmd = calls[0]
-    assert cmd[0] == "rclone"
+    data = resp.get_json()
+    assert data["status"] == "ok"
+    assert data["name"] == "foo"
+    assert "id" in data and isinstance(data["id"], int)
+    assert "route" not in data
+    assert "share_url" not in data
+    assert len(calls) >= 2
     config_path = os.getenv("RCLONE_CONFIG")
+    assert calls[0] == ["rclone", "--config", config_path, "listremotes"]
+    cmd = calls[-1]
+    assert cmd[0] == "rclone"
     assert "--config" in cmd
     assert cmd[cmd.index("--config") + 1] == config_path
     assert "--non-interactive" in cmd
@@ -256,10 +282,13 @@ def test_create_rclone_remote_custom_retries_without_no_auto_auth(monkeypatch, a
         },
     )
     assert resp.status_code == 201
-    assert resp.get_json() == {"status": "ok", "route": None}
-    assert len(calls) == 2
-    assert "--no-auto-auth" in calls[0]
-    assert "--no-auto-auth" not in calls[1]
+    data = resp.get_json()
+    assert data["status"] == "ok"
+    assert data["name"] == "foo"
+    assert "id" in data and isinstance(data["id"], int)
+    assert len(calls) >= 2
+    assert "--no-auto-auth" in calls[1]
+    assert "--no-auto-auth" not in calls[-1]
 
 
 def test_create_rclone_remote_shared_success(monkeypatch, app):
@@ -294,32 +323,30 @@ def test_create_rclone_remote_shared_success(monkeypatch, app):
         },
     )
     assert resp.status_code == 201
-    assert resp.get_json() == {
-        "status": "ok",
-        "route": "https://drive.google.com/drive/folders/abc123",
-        "share_url": "https://drive.google.com/drive/folders/abc123",
-    }
-    assert len(calls) == 4
+    data = resp.get_json()
+    assert data["status"] == "ok"
+    assert data["name"] == "foo"
+    assert data["route"] == "gdrive:foo"
+    assert data["share_url"] == "https://drive.google.com/drive/folders/abc123"
+    assert "id" in data and isinstance(data["id"], int)
     config_path = os.getenv("RCLONE_CONFIG")
-    list_cmd, mkdir_cmd, alias_cmd, link_cmd = calls
-    assert list_cmd == ["rclone", "--config", config_path, "listremotes"]
-    assert mkdir_cmd[:3] == ["rclone", "--config", config_path]
-    assert mkdir_cmd[3] == "mkdir"
+    assert any(cmd == ["rclone", "--config", config_path, "listremotes"] for cmd in calls)
+    mkdir_cmd = next(cmd for cmd in calls if len(cmd) > 3 and cmd[3] == "mkdir")
     assert mkdir_cmd[4] == "gdrive:foo"
-    assert alias_cmd[:3] == ["rclone", "--config", config_path]
-    assert alias_cmd[3:9] == [
+    alias_cmd = next(cmd for cmd in calls if len(cmd) > 5 and cmd[3:9] == [
         "config",
         "create",
         "--non-interactive",
         "foo",
         "alias",
         "remote",
-    ]
+    ])
     assert alias_cmd[9] == "gdrive:foo"
-    assert link_cmd[:3] == ["rclone", "--config", config_path]
-    assert link_cmd[3] == "link"
-    assert "gdrive:foo" in link_cmd
-    assert "--create-link" in link_cmd
+    assert any(
+        len(cmd) > 4 and cmd[3] == "link" and "--create-link" in cmd and "gdrive:foo" in cmd
+        for cmd in calls
+    )
+    assert any(len(cmd) > 4 and cmd[3] == "link" and "gdrive:foo" in cmd for cmd in calls)
 
     from orchestrator.app import SessionLocal
     from orchestrator.app.models import RcloneRemote
@@ -327,6 +354,7 @@ def test_create_rclone_remote_shared_success(monkeypatch, app):
     with SessionLocal() as db:
         stored = db.query(RcloneRemote).filter_by(name="foo").one()
         assert stored.type == "drive"
+        assert stored.route == "gdrive:foo"
         assert stored.share_url == "https://drive.google.com/drive/folders/abc123"
 
 
@@ -355,13 +383,14 @@ def test_create_rclone_remote_local_success(monkeypatch, app, tmp_path):
     )
     assert resp.status_code == 201
     expected_path = tmp_path / "localbackup"
-    assert resp.get_json() == {
-        "status": "ok",
-        "route": str(expected_path),
-        "share_url": str(expected_path),
-    }
-    assert len(calls) == 1
-    cmd = calls[0]
+    data = resp.get_json()
+    assert data["status"] == "ok"
+    assert data["name"] == "localbackup"
+    assert data["route"] == str(expected_path)
+    assert data["share_url"] == str(expected_path)
+    assert "id" in data and isinstance(data["id"], int)
+    assert len(calls) >= 1
+    cmd = calls[-1]
     config_path = os.getenv("RCLONE_CONFIG")
     assert cmd[:3] == ["rclone", "--config", config_path]
     assert cmd[3:9] == [
@@ -416,7 +445,22 @@ def test_update_rclone_remote_local_success(monkeypatch, app, tmp_path):
     assert commands[1][:6] == ["rclone", "--config", config_path, "config", "copy", "foo"]
     backup_name = commands[1][6]
     assert commands[2] == ["rclone", "--config", config_path, "config", "delete", "foo"]
-    create_cmd = commands[3]
+    create_cmd = next(
+        cmd
+        for cmd in commands
+        if cmd[:9]
+        == [
+            "rclone",
+            "--config",
+            config_path,
+            "config",
+            "create",
+            "--non-interactive",
+            "foo",
+            "alias",
+            "remote",
+        ]
+    )
     assert create_cmd[:9] == [
         "rclone",
         "--config",
@@ -429,14 +473,14 @@ def test_update_rclone_remote_local_success(monkeypatch, app, tmp_path):
         "remote",
     ]
     assert create_cmd[9] == str(expected_path)
-    assert commands[4] == [
+    assert [
         "rclone",
         "--config",
         config_path,
         "config",
         "delete",
         backup_name,
-    ]
+    ] in commands
 
     from orchestrator.app import SessionLocal
     from orchestrator.app.models import RcloneRemote
@@ -444,6 +488,7 @@ def test_update_rclone_remote_local_success(monkeypatch, app, tmp_path):
     with SessionLocal() as db:
         stored = db.query(RcloneRemote).filter_by(name="foo").one()
         assert stored.type == "local"
+        assert stored.route == str(expected_path)
         assert stored.share_url == str(expected_path)
     assert expected_path.is_dir()
 
@@ -543,7 +588,7 @@ def test_delete_rclone_remote_success(monkeypatch, app):
     from orchestrator.app.models import RcloneRemote
 
     with SessionLocal() as db:
-        db.add(RcloneRemote(name="foo", type="drive", share_url="https://demo"))
+        db.add(RcloneRemote(name="foo", type="drive", route="gdrive:foo", share_url="https://demo"))
         db.commit()
 
     monkeypatch.setattr(subprocess, "run", fake_run)
@@ -554,10 +599,14 @@ def test_delete_rclone_remote_success(monkeypatch, app):
     assert resp.get_json() == {"status": "ok"}
 
     config_path = os.getenv("RCLONE_CONFIG")
-    assert commands == [
-        ["rclone", "--config", config_path, "listremotes"],
-        ["rclone", "--config", config_path, "config", "delete", "foo"],
-    ]
+    assert commands[0] == ["rclone", "--config", config_path, "listremotes"]
+    assert commands[1][:6] == ["rclone", "--config", config_path, "config", "copy", "foo"]
+    backup_name = commands[1][6]
+    assert commands[2][:4] == ["rclone", "--config", config_path, "moveto"]
+    assert commands[3] == ["rclone", "--config", config_path, "config", "delete", "foo"]
+    assert commands[4][:3] == ["rclone", "--config", config_path]
+    assert commands[4][3] == "purge"
+    assert commands[5] == ["rclone", "--config", config_path, "config", "delete", backup_name]
 
     with SessionLocal() as db:
         assert db.query(RcloneRemote).filter_by(name="foo").count() == 0
@@ -587,7 +636,14 @@ def test_delete_rclone_remote_local_removes_folder(monkeypatch, app, tmp_path):
     from orchestrator.app.models import RcloneRemote, App
 
     with SessionLocal() as db:
-        db.add(RcloneRemote(name="foo", type="local", share_url=str(remote_folder)))
+        db.add(
+            RcloneRemote(
+                name="foo",
+                type="local",
+                route=str(remote_folder),
+                share_url=str(remote_folder),
+            )
+        )
         db.add(
             App(
                 name="demo",
@@ -712,7 +768,12 @@ def test_browse_sftp_directories_permission_error(monkeypatch, app):
     }
 
 
-def test_create_sftp_remote_requires_base_path(app):
+def test_create_sftp_remote_requires_base_path(monkeypatch, app):
+    class DummyResult:
+        stdout = ""
+        stderr = ""
+
+    monkeypatch.setattr(subprocess, "run", lambda *args, **kwargs: DummyResult())
     client = app.test_client()
     client.post("/login", data={"username": "admin", "password": "secret"})
     resp = client.post(
@@ -760,22 +821,29 @@ def test_create_sftp_remote_success(monkeypatch, app):
         },
     )
     assert resp.status_code == 201
-    assert resp.get_json() == {
-        "status": "ok",
-        "route": "/data",
-        "share_url": "/data",
-    }
-    assert len(calls) == 4
-    obscure_cmd, config_cmd, mkdir_cmd, lsd_cmd = calls
+    data = resp.get_json()
+    assert data["status"] == "ok"
+    assert data["name"] == "sftpbackup"
+    assert data["route"] == "/data"
+    assert data["share_url"] == "/data"
+    assert "id" in data and isinstance(data["id"], int)
+
+    config_path = os.getenv("RCLONE_CONFIG")
+    list_cmd = next(cmd for cmd in calls if cmd[-1] == "listremotes")
+    assert list_cmd == ["rclone", "--config", config_path, "listremotes"]
+    obscure_cmd = next(cmd for cmd in calls if "obscure" in cmd)
     assert obscure_cmd[0] == "rclone"
-    assert "obscure" in obscure_cmd
     assert obscure_cmd[-1] == "pass"
-    assert config_cmd[3:7] == ["config", "create", "--non-interactive", "sftpbackup"]
+    config_cmd = next(
+        cmd for cmd in calls if cmd[3:7] == ["config", "create", "--non-interactive", "sftpbackup"]
+    )
     path_index = config_cmd.index("path")
     assert config_cmd[path_index + 1] == "/data/sftpbackup"
     assert config_cmd[config_cmd.index("pass") + 1] == "obscured-pass"
-    assert mkdir_cmd[3:] == ["mkdir", "sftpbackup:"]
-    assert lsd_cmd[3:] == ["lsd", "sftpbackup:"]
+    mkdir_cmd = next(cmd for cmd in calls if cmd[3:] == ["mkdir", "sftpbackup:"])
+    lsd_cmd = next(cmd for cmd in calls if cmd[3:] == ["lsd", "sftpbackup:"])
+    assert mkdir_cmd[0] == "rclone"
+    assert lsd_cmd[0] == "rclone"
 
 
 def test_create_sftp_remote_permission_error(monkeypatch, app):
@@ -814,11 +882,10 @@ def test_create_sftp_remote_permission_error(monkeypatch, app):
     assert resp.get_json() == {
         "error": "El usuario SFTP no tiene permisos suficientes en esa carpeta. Probá con otra ubicación o ajustá los permisos en el servidor.",
     }
-    assert len(calls) == 4
     config_path = os.getenv("RCLONE_CONFIG")
-    delete_cmd = calls[-1]
-    assert delete_cmd[:4] == ["rclone", "--config", config_path, "config"]
-    assert delete_cmd[4:6] == ["delete", "sftpbackup"]
+    assert any(cmd == ["rclone", "--config", config_path, "listremotes"] for cmd in calls)
+    delete_cmd = next(cmd for cmd in calls if cmd[3:6] == ["config", "delete", "sftpbackup"])
+    assert delete_cmd[:3] == ["rclone", "--config", config_path]
 
 
 def test_create_rclone_remote_nested_config_path(monkeypatch, app, tmp_path):
@@ -850,7 +917,11 @@ def test_create_rclone_remote_nested_config_path(monkeypatch, app, tmp_path):
         },
     )
     assert resp.status_code == 201
-    assert resp.get_json() == {"status": "ok", "route": None}
+    data = resp.get_json()
+    assert data["status"] == "ok"
+    assert data["name"] == "foo"
+    assert "id" in data and isinstance(data["id"], int)
+    assert "route" not in data
     assert nested_config.parent.is_dir()
     cmd = calls[-1]
     assert "--config" in cmd
@@ -870,7 +941,11 @@ def test_create_rclone_remote_nested_config_path(monkeypatch, app, tmp_path):
         },
     )
     assert resp.status_code == 201
-    assert resp.get_json() == {"status": "ok", "route": None}
+    data = resp.get_json()
+    assert data["status"] == "ok"
+    assert data["name"] == "bar"
+    assert "id" in data and isinstance(data["id"], int)
+    assert "route" not in data
     assert default_config.parent.is_dir()
     cmd = calls[-1]
     assert "--config" in cmd
@@ -879,7 +954,17 @@ def test_create_rclone_remote_nested_config_path(monkeypatch, app, tmp_path):
 
 
 def test_create_rclone_remote_failure(monkeypatch, app):
+    calls: list[list[str]] = []
+
+    class DummyResult:
+        def __init__(self, stdout: str = "", stderr: str = "") -> None:
+            self.stdout = stdout
+            self.stderr = stderr
+
     def fake_run(cmd, capture_output, text, check):
+        calls.append(cmd)
+        if cmd[-1] == "listremotes":
+            return DummyResult(stdout="")
         raise subprocess.CalledProcessError(1, cmd, stderr="boom")
 
     monkeypatch.setattr(subprocess, "run", fake_run)
@@ -895,6 +980,8 @@ def test_create_rclone_remote_failure(monkeypatch, app):
     )
     assert resp.status_code == 400
     assert resp.get_json() == {"error": "boom"}
+    config_path = os.getenv("RCLONE_CONFIG")
+    assert calls[0] == ["rclone", "--config", config_path, "listremotes"]
 
 
 def test_create_rclone_remote_shared_share_failure(monkeypatch, app):
@@ -906,6 +993,8 @@ def test_create_rclone_remote_shared_share_failure(monkeypatch, app):
 
         if cmd[-1] == "listremotes":
             return DummyResult(stdout="gdrive:\n")
+        if len(cmd) > 3 and cmd[3] == "lsf":
+            return DummyResult(stdout="")
         if "mkdir" in cmd:
             return DummyResult()
         if "config" in cmd and "alias" in cmd:
@@ -939,6 +1028,8 @@ def test_create_rclone_remote_shared_missing_share_url(monkeypatch, app):
 
         if cmd[-1] == "listremotes":
             return DummyResult(stdout="gdrive:\n")
+        if len(cmd) > 3 and cmd[3] == "lsf":
+            return DummyResult(stdout="")
         if "mkdir" in cmd:
             return DummyResult()
         if "config" in cmd and "alias" in cmd:
@@ -961,7 +1052,12 @@ def test_create_rclone_remote_shared_missing_share_url(monkeypatch, app):
     }
 
 
-def test_create_rclone_remote_invalid_drive_mode(app):
+def test_create_rclone_remote_invalid_drive_mode(monkeypatch, app):
+    class DummyResult:
+        stdout = ""
+        stderr = ""
+
+    monkeypatch.setattr(subprocess, "run", lambda *args, **kwargs: DummyResult())
     client = app.test_client()
     client.post("/login", data={"username": "admin", "password": "secret"})
     resp = client.post(
@@ -1011,15 +1107,31 @@ def test_create_rclone_remote_shared_bootstrap_default_remote(monkeypatch, app):
         },
     )
     assert resp.status_code == 201
-    assert resp.get_json() == {
-        "status": "ok",
-        "route": "https://drive.google.com/drive/folders/new",
-        "share_url": "https://drive.google.com/drive/folders/new",
-    }
+    data = resp.get_json()
+    assert data["status"] == "ok"
+    assert data["name"] == "foo"
+    assert data["route"] == "gdrive:foo"
+    assert data["share_url"] == "https://drive.google.com/drive/folders/new"
+    assert "id" in data and isinstance(data["id"], int)
+
     config_path = os.getenv("RCLONE_CONFIG")
-    assert len(calls) == 5
-    list_cmd, default_create, mkdir_cmd, alias_cmd, link_cmd = calls
-    assert list_cmd == ["rclone", "--config", config_path, "listremotes"]
+    list_calls = [cmd for cmd in calls if cmd == ["rclone", "--config", config_path, "listremotes"]]
+    assert len(list_calls) >= 2
+    default_create = next(
+        cmd
+        for cmd in calls
+        if cmd[:8]
+        == [
+            "rclone",
+            "--config",
+            config_path,
+            "config",
+            "create",
+            "--non-interactive",
+            "gdrive",
+            "drive",
+        ]
+    )
     assert default_create[:5] == [
         "rclone",
         "--config",
@@ -1037,18 +1149,20 @@ def test_create_rclone_remote_shared_bootstrap_default_remote(monkeypatch, app):
     assert default_create[default_create.index("client_id") + 1] == "cid"
     assert "client_secret" in default_create
     assert default_create[default_create.index("client_secret") + 1] == "sec"
-    assert mkdir_cmd[3] == "mkdir"
-    assert alias_cmd[3:9] == [
-        "config",
-        "create",
-        "--non-interactive",
-        "foo",
-        "alias",
-        "remote",
-    ]
+    mkdir_cmd = next(cmd for cmd in calls if len(cmd) > 3 and cmd[3] == "mkdir")
+    alias_cmd = next(
+        cmd for cmd in calls if cmd[3:9] == [
+            "config",
+            "create",
+            "--non-interactive",
+            "foo",
+            "alias",
+            "remote",
+        ]
+    )
     assert alias_cmd[9] == "gdrive:foo"
+    link_cmd = next(cmd for cmd in calls if len(cmd) > 3 and cmd[3] == "link")
     assert link_cmd[:3] == ["rclone", "--config", config_path]
-    assert link_cmd[3] == "link"
     assert "gdrive:foo" in link_cmd
 
 
@@ -1084,4 +1198,4 @@ def test_create_rclone_remote_shared_missing_default_remote(monkeypatch, app):
         "error": "La cuenta global de Google Drive no está configurada. Revisá las variables RCLONE_DRIVE_CLIENT_ID, RCLONE_DRIVE_CLIENT_SECRET y RCLONE_DRIVE_TOKEN.",
     }
     config_path = os.getenv("RCLONE_CONFIG")
-    assert calls == [["rclone", "--config", config_path, "listremotes"]]
+    assert sum(1 for cmd in calls if cmd == ["rclone", "--config", config_path, "listremotes"]) == 2

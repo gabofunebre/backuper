@@ -530,12 +530,19 @@ async function loadRemotes() {
     remotes.forEach((entry) => {
       const rawRemote = typeof entry === 'string' ? { name: entry } : entry || {};
       const name = (rawRemote.name || '').trim();
-      const route = rawRemote.route || rawRemote.share_url || '';
+      const rawRoute = (rawRemote.route && typeof rawRemote.route === 'string')
+        ? rawRemote.route.trim()
+        : '';
+      const rawShare = (rawRemote.share_url && typeof rawRemote.share_url === 'string')
+        ? rawRemote.share_url.trim()
+        : '';
+      const displayRoute = rawShare || rawRoute;
       const normalizedRemote = {
         ...rawRemote,
         name,
-        route,
-        share_url: rawRemote.share_url || route,
+        route: rawRoute,
+        share_url: rawShare,
+        display_route: displayRoute,
       };
       const remoteType = (normalizedRemote.type || '').toLowerCase();
       if (tbody) {
@@ -546,19 +553,19 @@ async function loadRemotes() {
         tr.appendChild(nameCell);
 
         const linkCell = document.createElement('td');
-        if (route) {
-          const looksLikeUrl = /^https?:\/\//i.test(route);
+        if (displayRoute) {
+          const looksLikeUrl = /^https?:\/\//i.test(displayRoute);
           if (remoteType === 'drive' && looksLikeUrl) {
             const anchor = document.createElement('a');
-            anchor.href = route;
+            anchor.href = displayRoute;
             anchor.target = '_blank';
             anchor.rel = 'noopener';
-            anchor.textContent = route;
+            anchor.textContent = displayRoute;
             anchor.classList.add('text-break');
             linkCell.appendChild(anchor);
           } else {
             const span = document.createElement('span');
-            span.textContent = route;
+            span.textContent = displayRoute;
             span.classList.add('text-break');
             linkCell.appendChild(span);
           }
@@ -1221,22 +1228,22 @@ function initRemoteForm() {
         delete directoryCache.local;
         resetSftpBrowser(true);
         const feedbackOptions = {};
-        const rawRoute = (data && typeof data.route === 'string' && data.route.trim())
-          ? data.route.trim()
-          : (data && typeof data.share_url === 'string' && data.share_url.trim())
-            ? data.share_url.trim()
+        const linkValue = (data && typeof data.share_url === 'string' && data.share_url.trim())
+          ? data.share_url.trim()
+          : (data && typeof data.route === 'string' && data.route.trim())
+            ? data.route.trim()
             : '';
         const successBase = isEditing
           ? 'Remote actualizado correctamente.'
           : 'Remote guardado correctamente.';
         let successMessage = successBase;
-        if (rawRoute) {
-          const looksLikeUrl = /^https?:\/\//i.test(rawRoute);
+        if (linkValue) {
+          const looksLikeUrl = /^https?:\/\//i.test(linkValue);
           if (type === 'drive' && looksLikeUrl) {
-            feedbackOptions.link = rawRoute;
+            feedbackOptions.link = linkValue;
             successMessage = `${successBase} Compartí este enlace:`;
           } else {
-            successMessage = `${successBase} Ruta configurada: ${rawRoute}`;
+            successMessage = `${successBase} Ruta configurada: ${linkValue}`;
           }
         }
         showFeedback(successMessage, 'success', feedbackOptions);
