@@ -53,9 +53,11 @@ RCLONE_REMOTE=gdrive
 ```
 
 > El **remote** `gdrive` se configura una sola vez y vive en `./rcloneConfig` (montado en `/config/rclone` dentro del contenedor).
+> Como es un bind mount del host, Docker no lo recrea ni lo pisa cuando corrés `docker compose down` seguido de `docker compose up`: la carpeta y el archivo `rclone.conf` quedan en tu disco.
 
 ## 4) Primer arranque
-El `docker-compose` monta `./rcloneConfig` dentro del contenedor para conservar la configuración de rclone entre reinicios. La carpeta se crea automáticamente al levantar los servicios (o podés crearla manualmente con `mkdir -p rcloneConfig`).
+El `docker-compose` monta `./rcloneConfig` dentro del contenedor para conservar la configuración de rclone entre reinicios. La carpeta se crea automáticamente al levantar los servicios (o podés crearla manualmente con `mkdir -p rcloneConfig`). Mientras no borres esa carpeta en el host (o elimines su contenido), cualquier recreación del contenedor volverá a usar exactamente la misma configuración.
+
 ```bash
 docker compose up -d --build
 ```
