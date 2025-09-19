@@ -1,6 +1,7 @@
 import json
 import os
 import posixpath
+import shutil
 import re
 import subprocess
 import tempfile
@@ -72,6 +73,10 @@ def create_app() -> Flask:
         drive_mode: str | None = None
         drive_remote_path: str | None = None
         share_url: str | None = None
+        local_target_path: str | None = None
+        local_source_path: str | None = None
+        local_base_path: str | None = None
+        local_move_mode: str | None = None
 
     class RemoteOperationError(Exception):
         """Raised when a remote operation fails for a known reason."""
@@ -108,6 +113,83 @@ def create_app() -> Flask:
 
     def get_local_directories() -> list[dict[str, str]]:
         return _parse_directory_config(os.getenv("RCLONE_LOCAL_DIRECTORIES", ""))
+
+    def _ensure_absolute_path(value: str | None) -> str | None:
+        if value is None:
+            return None
+        candidate = value.strip()
+        if not candidate:
+            return None
+        return os.path.abspath(candidate)
+
+    def _normalize_filesystem_path(path: str | None) -> str:
+        candidate = _ensure_absolute_path(path)
+        if not candidate:
+            return ""
+        if candidate != os.sep:
+            candidate = candidate.rstrip(os.sep)
+        return os.path.normcase(candidate)
+
+    def _format_local_error(action: str, path: str, exc: OSError) -> str:
+        base = f"No se pudo {action} la carpeta \"{path}\"."
+        if isinstance(exc, FileExistsError):
+            return f"{base} Ya existe un archivo o carpeta con ese nombre."
+        if isinstance(exc, FileNotFoundError):
+            return f"{base} No se encontró la ruta especificada."
+        if isinstance(exc, PermissionError):
+            return (
+                f"{base} El sistema denegó el acceso. Verificá los permisos en el servidor."
+            )
+        detail = (exc.strerror or str(exc) or "").strip()
+        if detail:
+            return f"{base} {detail}"
+        return f"{base} Revisá los permisos en el servidor."
+
+    def _get_local_directory_roots() -> set[str]:
+        roots: set[str] = set()
+        for entry in get_local_directories():
+            raw_path = (entry.get("path") or "") if isinstance(entry, dict) else ""
+            candidate = _ensure_absolute_path(raw_path)
+            if not candidate:
+                continue
+            normalized = _normalize_filesystem_path(candidate)
+            if normalized:
+                roots.add(normalized)
+        return roots
+
+    def _rollback_local_changes(
+        move_mode: str | None,
+        target_path: str | None,
+        source_path: str | None,
+        moved_entries: list[str],
+        created_path: str | None,
+    ) -> list[str]:
+        errors: list[str] = []
+        if move_mode == "rename" and target_path and source_path:
+            try:
+                shutil.move(target_path, source_path)
+            except OSError as exc:
+                errors.append(_format_local_error("restaurar", source_path, exc))
+        elif move_mode == "move_contents" and target_path and source_path:
+            for entry in moved_entries:
+                src = os.path.join(target_path, entry)
+                dst = os.path.join(source_path, entry)
+                try:
+                    shutil.move(src, dst)
+                except OSError as exc:
+                    errors.append(_format_local_error("restaurar", dst, exc))
+            if created_path:
+                try:
+                    shutil.rmtree(created_path)
+                except OSError as exc:
+                    errors.append(_format_local_error("eliminar", created_path, exc))
+                created_path = None
+        if created_path and move_mode != "move_contents":
+            try:
+                shutil.rmtree(created_path)
+            except OSError as exc:
+                errors.append(_format_local_error("eliminar", created_path, exc))
+        return errors
 
     def _normalize_remote_name(value: str | None) -> str:
         cleaned = (value or "").strip()
@@ -164,7 +246,14 @@ def create_app() -> Flask:
             return "No fue posible conectarse al servidor SFTP. Asegurate de que esté en línea y accesible."
         return text
 
-    def _build_remote_plan(name: str, remote_type: str, settings: dict) -> RemotePlan:
+    def _build_remote_plan(
+        name: str,
+        remote_type: str,
+        settings: dict,
+        *,
+        current_remote_type: str | None = None,
+        current_remote_route: str | None = None,
+    ) -> RemotePlan:
         base_args = ["config", "create", "--non-interactive", name]
         normalized_type = (remote_type or "").strip().lower()
         plan = RemotePlan(command=[], pre_commands=[], post_commands=[])
@@ -217,16 +306,79 @@ def create_app() -> Flask:
                 if client_secret:
                     plan.command.extend(["client_secret", client_secret])
         elif normalized_type == "local":
-            directories = {entry["path"] for entry in get_local_directories()}
-            if not directories:
+            directory_entries = get_local_directories()
+            if not directory_entries:
                 raise RemoteOperationError("no local directories configured", 500)
             path = (settings.get("path") or "").strip()
             if not path:
-                raise RemoteOperationError("path is required")
-            if path not in directories:
+                raise RemoteOperationError(
+                    "Seleccioná la carpeta local donde guardar los respaldos."
+                )
+            available_paths = {
+                (entry.get("path") or "").strip() for entry in directory_entries
+            }
+            if path not in available_paths:
                 raise RemoteOperationError("invalid path")
-            plan.share_url = path
-            plan.command = [*base_args, "alias", "remote", path]
+            base_path = _ensure_absolute_path(path)
+            if not base_path or not os.path.isdir(base_path):
+                raise RemoteOperationError(
+                    "La carpeta seleccionada no existe o no es accesible desde el servidor."
+                )
+            safe_name = name.strip()
+            if not safe_name:
+                raise RemoteOperationError(
+                    "El nombre del remote no es válido para crear la carpeta local."
+                )
+            for separator in (os.sep, os.altsep):
+                if separator and separator in safe_name:
+                    raise RemoteOperationError(
+                        "El nombre del remote no puede contener separadores de carpeta."
+                    )
+            if safe_name in {".", ".."}:
+                raise RemoteOperationError(
+                    "Elegí otro nombre para la carpeta del remote."
+                )
+            target_path = os.path.abspath(os.path.join(base_path, safe_name))
+            try:
+                common_root = os.path.commonpath([base_path, target_path])
+            except ValueError as exc:
+                raise RemoteOperationError(
+                    "El nombre del remote genera una ruta inválida dentro de la carpeta seleccionada."
+                ) from exc
+            if os.path.normcase(common_root) != os.path.normcase(base_path):
+                raise RemoteOperationError(
+                    "El nombre del remote genera una ruta inválida dentro de la carpeta seleccionada."
+                )
+            normalized_target = _normalize_filesystem_path(target_path)
+            normalized_base = _normalize_filesystem_path(base_path)
+            existing_path: str | None = None
+            move_mode: str | None = None
+            if (current_remote_type or "").strip().lower() == "local" and current_remote_route:
+                candidate_existing = _ensure_absolute_path(current_remote_route)
+                if candidate_existing:
+                    normalized_existing = _normalize_filesystem_path(candidate_existing)
+                    if normalized_existing == normalized_target:
+                        existing_path = candidate_existing
+                    elif normalized_existing == normalized_base:
+                        existing_path = candidate_existing
+                        move_mode = "move_contents"
+                    else:
+                        existing_path = candidate_existing
+                        move_mode = "rename"
+            if os.path.exists(target_path):
+                normalized_existing = (
+                    _normalize_filesystem_path(existing_path) if existing_path else ""
+                )
+                if normalized_existing != normalized_target:
+                    raise RemoteOperationError(
+                        "Ya existe una carpeta con ese nombre en la ruta seleccionada. Elegí otro nombre."
+                    )
+            plan.share_url = target_path
+            plan.command = [*base_args, "alias", "remote", target_path]
+            plan.local_target_path = target_path
+            plan.local_source_path = existing_path
+            plan.local_base_path = base_path
+            plan.local_move_mode = move_mode
         elif normalized_type == "sftp":
             host = (settings.get("host") or "").strip()
             username = (settings.get("username") or settings.get("user") or "").strip()
@@ -405,7 +557,8 @@ def create_app() -> Flask:
     @login_required
     def rclone_config() -> str:
         """Render rclone remote configuration page."""
-        return render_template("rclone_config.html")
+        admin_email = (os.getenv("APP_ADMIN_EMAIL") or "").strip()
+        return render_template("rclone_config.html", admin_email=admin_email)
 
     @app.route("/logs")
     @login_required
@@ -778,11 +931,24 @@ def create_app() -> Flask:
         except DefaultDriveRemoteError as exc:
             return {"error": str(exc)}, 500
 
+        local_created_path: str | None = None
         try:
+            local_target_path = getattr(plan, "local_target_path", None)
+            local_source_path = getattr(plan, "local_source_path", None)
+            if local_target_path and not local_source_path:
+                try:
+                    os.makedirs(local_target_path, exist_ok=False)
+                except OSError as exc:
+                    return {"error": _format_local_error("crear", local_target_path, exc)}, 400
+                local_created_path = local_target_path
             share_url = _execute_remote_plan(name, plan)
         except RemoteOperationError as exc:
+            if local_created_path:
+                shutil.rmtree(local_created_path, ignore_errors=True)
             return {"error": str(exc)}, exc.status_code
         except RuntimeError:
+            if local_created_path:
+                shutil.rmtree(local_created_path, ignore_errors=True)
             return {"error": "rclone is not installed"}, 500
 
         with SessionLocal() as db:
@@ -813,10 +979,14 @@ def create_app() -> Flask:
         data = request.get_json(force=True) or {}
         normalized_name = _normalize_remote_name(remote_name)
         remote_type = (data.get("type") or "").strip().lower()
+        requested_name = (data.get("name") or "").strip()
+        target_name = _normalize_remote_name(requested_name or remote_name)
         if not normalized_name:
             return {"error": "remote not found"}, 404
         if not remote_type:
             return {"error": "invalid payload"}, 400
+        if not target_name:
+            return {"error": "Completá un nombre válido para el remote."}, 400
 
         allowed_types = {"drive", "onedrive", "sftp", "local"}
         if remote_type not in allowed_types:
@@ -829,13 +999,55 @@ def create_app() -> Flask:
             return {"error": "rclone is not installed"}, 500
         if normalized_name not in configured:
             return {"error": "remote not found"}, 404
+        if target_name != normalized_name and target_name in configured:
+            return {"error": "Ya existe un remote con ese nombre."}, 400
+
+        stored_type: str | None = None
+        stored_route: str | None = None
+        with SessionLocal() as db:
+            stored_remote = db.query(RcloneRemote).filter_by(name=normalized_name).one_or_none()
+            if stored_remote:
+                stored_type = (stored_remote.type or "").strip().lower() or None
+                stored_route = (stored_remote.route or "").strip() or None
 
         try:
-            plan = _build_remote_plan(normalized_name, remote_type, settings)
+            plan = _build_remote_plan(
+                target_name,
+                remote_type,
+                settings,
+                current_remote_type=stored_type,
+                current_remote_route=stored_route,
+            )
         except RemoteOperationError as exc:
             return {"error": str(exc)}, exc.status_code
         except DefaultDriveRemoteError as exc:
             return {"error": str(exc)}, 500
+
+        allowed_roots = _get_local_directory_roots()
+        local_target_path = getattr(plan, "local_target_path", None)
+        local_source_path = getattr(plan, "local_source_path", None)
+        move_mode = getattr(plan, "local_move_mode", None)
+        created_local_path: str | None = None
+        renamed_source_path: str | None = None
+        move_contents_source: str | None = None
+        moved_entries: list[str] = []
+
+        if local_target_path:
+            target_parent = _normalize_filesystem_path(
+                os.path.dirname(local_target_path.rstrip(os.sep)) or os.sep
+            )
+            if target_parent and target_parent not in allowed_roots:
+                return {"error": "La carpeta seleccionada no forma parte de las rutas permitidas."}, 400
+            if move_mode == "rename" and local_source_path:
+                source_parent = _normalize_filesystem_path(
+                    os.path.dirname(local_source_path.rstrip(os.sep)) or os.sep
+                )
+                if source_parent and source_parent not in allowed_roots:
+                    return {"error": "La carpeta actual del remote no forma parte de las rutas permitidas."}, 400
+            if move_mode == "move_contents" and local_source_path:
+                source_base = _normalize_filesystem_path(local_source_path)
+                if source_base and source_base not in allowed_roots:
+                    return {"error": "La carpeta actual del remote no forma parte de las rutas permitidas."}, 400
 
         backup_name = f"__backup__{uuid.uuid4().hex[:8]}"
         try:
@@ -853,6 +1065,59 @@ def create_app() -> Flask:
             return {"error": message}, 400
 
         try:
+            if local_target_path:
+                if move_mode == "move_contents":
+                    if not local_source_path or not os.path.isdir(local_source_path):
+                        _delete_remote_safely(backup_name)
+                        return {
+                            "error": "No encontramos la carpeta actual del remote en el servidor. Verificá que siga existiendo."
+                        }, 400
+                    try:
+                        os.makedirs(local_target_path, exist_ok=False)
+                    except OSError as exc:
+                        _delete_remote_safely(backup_name)
+                        return {"error": _format_local_error("crear", local_target_path, exc)}, 400
+                    created_local_path = local_target_path
+                    move_contents_source = local_source_path
+                    for entry in os.listdir(local_source_path):
+                        source_entry = os.path.join(local_source_path, entry)
+                        target_entry = os.path.join(local_target_path, entry)
+                        try:
+                            shutil.move(source_entry, target_entry)
+                        except OSError as exc:
+                            revert_errors = _rollback_local_changes(
+                                move_mode,
+                                local_target_path,
+                                move_contents_source,
+                                moved_entries,
+                                created_local_path,
+                            )
+                            _delete_remote_safely(backup_name)
+                            message = _format_local_error("mover", target_entry, exc)
+                            if revert_errors:
+                                message = f"{message} {' '.join(revert_errors)}"
+                            return {"error": message}, 400
+                        moved_entries.append(entry)
+                elif move_mode == "rename":
+                    if not local_source_path or not os.path.exists(local_source_path):
+                        _delete_remote_safely(backup_name)
+                        return {
+                            "error": "No se encontró la carpeta actual del remote. Verificá que siga existiendo."
+                        }, 400
+                    try:
+                        shutil.move(local_source_path, local_target_path)
+                    except OSError as exc:
+                        _delete_remote_safely(backup_name)
+                        return {"error": _format_local_error("mover", local_target_path, exc)}, 400
+                    renamed_source_path = local_source_path
+                elif not local_source_path:
+                    try:
+                        os.makedirs(local_target_path, exist_ok=False)
+                    except OSError as exc:
+                        _delete_remote_safely(backup_name)
+                        return {"error": _format_local_error("crear", local_target_path, exc)}, 400
+                    created_local_path = local_target_path
+
             run_rclone(
                 ["config", "delete", normalized_name],
                 capture_output=True,
@@ -860,51 +1125,102 @@ def create_app() -> Flask:
                 check=True,
             )
         except RuntimeError:
+            revert_errors = _rollback_local_changes(
+                move_mode,
+                local_target_path,
+                move_contents_source if move_mode == "move_contents" else renamed_source_path,
+                moved_entries,
+                created_local_path,
+            )
             _delete_remote_safely(backup_name)
-            return {"error": "rclone is not installed"}, 500
+            message = "rclone is not installed"
+            if revert_errors:
+                message = f"{message} {' '.join(revert_errors)}"
+            return {"error": message}, 500
         except subprocess.CalledProcessError as exc:
-            message = (exc.stderr or exc.stdout or "").strip() or "No se pudo reemplazar el remote."
+            revert_errors = _rollback_local_changes(
+                move_mode,
+                local_target_path,
+                move_contents_source if move_mode == "move_contents" else renamed_source_path,
+                moved_entries,
+                created_local_path,
+            )
             _delete_remote_safely(backup_name)
+            message = (exc.stderr or exc.stdout or "").strip() or "No se pudo reemplazar el remote."
+            if revert_errors:
+                message = f"{message} {' '.join(revert_errors)}"
             return {"error": message}, 400
 
         share_url: str | None = None
         try:
-            share_url = _execute_remote_plan(normalized_name, plan)
+            share_url = _execute_remote_plan(target_name, plan)
         except RemoteOperationError as exc:
+            revert_errors = _rollback_local_changes(
+                move_mode,
+                local_target_path,
+                move_contents_source if move_mode == "move_contents" else renamed_source_path,
+                moved_entries,
+                created_local_path,
+            )
             restored = _restore_remote_backup(normalized_name, backup_name)
             _delete_remote_safely(backup_name)
+            message = str(exc)
+            if revert_errors:
+                message = f"{message} {' '.join(revert_errors)}"
             if not restored:
                 return {
-                    "error": f"{exc}. No se pudo restaurar la configuración original.",
+                    "error": f"{message} No se pudo restaurar la configuración original.",
                 }, 500
-            return {"error": str(exc)}, exc.status_code
+            return {"error": message}, exc.status_code
         except RuntimeError:
+            revert_errors = _rollback_local_changes(
+                move_mode,
+                local_target_path,
+                move_contents_source if move_mode == "move_contents" else renamed_source_path,
+                moved_entries,
+                created_local_path,
+            )
             restored = _restore_remote_backup(normalized_name, backup_name)
             _delete_remote_safely(backup_name)
+            message = "rclone is not installed"
+            if revert_errors:
+                message = f"{message} {' '.join(revert_errors)}"
             if not restored:
                 return {
-                    "error": "rclone is not installed. No se pudo restaurar la configuración original.",
+                    "error": f"{message}. No se pudo restaurar la configuración original.",
                 }, 500
-            return {"error": "rclone is not installed"}, 500
+            return {"error": message}, 500
 
         _delete_remote_safely(backup_name)
 
+        normalized_old_remote = _normalize_remote(normalized_name)
+        normalized_new_remote = _normalize_remote(target_name)
         with SessionLocal() as db:
             existing = db.query(RcloneRemote).filter_by(name=normalized_name).one_or_none()
+            conflict = None
+            if target_name != normalized_name:
+                conflict = db.query(RcloneRemote).filter_by(name=target_name).one_or_none()
+            if conflict and conflict is not existing:
+                db.delete(conflict)
             if existing:
+                existing.name = target_name
                 existing.type = remote_type
                 existing.route = share_url
             else:
                 db.add(
                     RcloneRemote(
-                        name=normalized_name,
+                        name=target_name,
                         type=remote_type,
                         route=share_url,
                     )
                 )
+            if target_name != normalized_name:
+                apps_to_update = db.query(App).filter_by(rclone_remote=normalized_old_remote).all()
+                for app_obj in apps_to_update:
+                    app_obj.rclone_remote = normalized_new_remote
             db.commit()
 
-        response = {"status": "ok", "route": share_url}
+        response = {"status": "ok", "route": share_url, "name": target_name}
         if share_url:
             response["share_url"] = share_url
         return response, 200
@@ -918,12 +1234,60 @@ def create_app() -> Flask:
         if not normalized_name:
             return {"error": "remote not found"}, 404
 
+        stored_type: str | None = None
+        stored_route: str | None = None
+        with SessionLocal() as db:
+            stored_remote = db.query(RcloneRemote).filter_by(name=normalized_name).one_or_none()
+            if stored_remote:
+                stored_type = (stored_remote.type or "").strip().lower() or None
+                stored_route = (stored_remote.route or "").strip() or None
+
         try:
             configured = fetch_configured_remotes()
         except RuntimeError:
             return {"error": "rclone is not installed"}, 500
         if normalized_name not in configured:
             return {"error": "remote not found"}, 404
+
+        allowed_roots = _get_local_directory_roots()
+        local_path_to_remove: str | None = None
+        if stored_type == "local" and stored_route:
+            candidate = _ensure_absolute_path(stored_route)
+            if candidate:
+                parent_path = os.path.dirname(candidate.rstrip(os.sep)) or os.sep
+                normalized_parent = _normalize_filesystem_path(parent_path)
+                normalized_candidate = _normalize_filesystem_path(candidate)
+                if (
+                    normalized_parent
+                    and normalized_parent in allowed_roots
+                    and normalized_candidate
+                    and normalized_candidate != normalized_parent
+                ):
+                    local_path_to_remove = candidate
+                else:
+                    return {
+                        "error": (
+                            "No se pudo identificar la carpeta asociada al remote. "
+                            "Actualizalo antes de eliminarlo o contactá al administrador."
+                        )
+                    }, 400
+
+        backup_name: str | None = None
+        if local_path_to_remove:
+            backup_name = f"__delete__{uuid.uuid4().hex[:8]}"
+            try:
+                run_rclone(
+                    ["config", "copy", normalized_name, backup_name],
+                    capture_output=True,
+                    text=True,
+                    check=True,
+                )
+            except RuntimeError:
+                return {"error": "rclone is not installed"}, 500
+            except subprocess.CalledProcessError as exc:
+                message = (exc.stderr or exc.stdout or "").strip() or "No se pudo preparar la eliminación del remote."
+                _delete_remote_safely(backup_name)
+                return {"error": message}, 400
 
         try:
             run_rclone(
@@ -933,18 +1297,53 @@ def create_app() -> Flask:
                 check=True,
             )
         except RuntimeError:
+            if backup_name:
+                _delete_remote_safely(backup_name)
             return {"error": "rclone is not installed"}, 500
         except subprocess.CalledProcessError as exc:
             message = (exc.stderr or exc.stdout or "").strip() or "failed to delete remote"
+            if backup_name:
+                _delete_remote_safely(backup_name)
             return {"error": message}, 400
 
+        removal_error: str | None = None
+        if local_path_to_remove:
+            if os.path.exists(local_path_to_remove):
+                try:
+                    shutil.rmtree(local_path_to_remove)
+                except OSError as exc:
+                    removal_error = _format_local_error("eliminar", local_path_to_remove, exc)
+            if removal_error:
+                restored = False
+                if backup_name:
+                    restored = _restore_remote_backup(normalized_name, backup_name)
+                    _delete_remote_safely(backup_name)
+                message = removal_error
+                if restored:
+                    return {
+                        "error": f"{message} La configuración original del remote se restauró.",
+                    }, 400
+                return {
+                    "error": f"{message} No se pudo restaurar la configuración original."
+                }, 500
+
+        if backup_name:
+            _delete_remote_safely(backup_name)
+
+        normalized_remote_value = _normalize_remote(normalized_name)
         with SessionLocal() as db:
             existing = db.query(RcloneRemote).filter_by(name=normalized_name).one_or_none()
             if existing:
                 db.delete(existing)
+            apps = db.query(App).filter_by(rclone_remote=normalized_remote_value).all()
+            for app_obj in apps:
+                app_obj.rclone_remote = None
             db.commit()
 
-        return {"status": "ok"}, 200
+        response = {"status": "ok"}
+        if local_path_to_remove:
+            response["removed_path"] = local_path_to_remove
+        return response, 200
 
     @app.post("/apps")
     @login_required
