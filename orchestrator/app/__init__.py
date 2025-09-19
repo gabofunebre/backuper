@@ -4,6 +4,7 @@ import posixpath
 import re
 import subprocess
 import tempfile
+import uuid
 from functools import wraps
 from flask import (
     Flask,
@@ -17,6 +18,8 @@ from flask import (
 from dotenv import load_dotenv
 from sqlalchemy import inspect, text
 from apscheduler.triggers.cron import CronTrigger
+from dataclasses import dataclass
+from typing import Callable
 
 from .database import Base, SessionLocal, engine
 from .models import App, RcloneRemote
@@ -59,6 +62,23 @@ def create_app() -> Flask:
             conn.execute(text("ALTER TABLE apps ADD COLUMN retention INTEGER"))
     start_scheduler()
 
+    @dataclass
+    class RemotePlan:
+        command: list[str]
+        pre_commands: list[list[str]]
+        post_commands: list[list[str]]
+        cleanup_on_error: bool = False
+        error_translator: Callable[[str], str] | None = None
+        drive_mode: str | None = None
+        drive_remote_path: str | None = None
+
+    class RemoteOperationError(Exception):
+        """Raised when a remote operation fails for a known reason."""
+
+        def __init__(self, message: str, status_code: int = 400) -> None:
+            super().__init__(message)
+            self.status_code = status_code
+
     admin_user = os.getenv("APP_ADMIN_USER")
     admin_pass = os.getenv("APP_ADMIN_PASS")
     app.secret_key = os.getenv("APP_SECRET_KEY", "devkey")
@@ -87,6 +107,12 @@ def create_app() -> Flask:
 
     def get_local_directories() -> list[dict[str, str]]:
         return _parse_directory_config(os.getenv("RCLONE_LOCAL_DIRECTORIES", ""))
+
+    def _normalize_remote_name(value: str | None) -> str:
+        cleaned = (value or "").strip()
+        if not cleaned:
+            return ""
+        return _normalize_remote(cleaned).rstrip(":")
 
     def _normalize_sftp_base_path(value: str | None) -> str:
         candidate = (value or "/").strip()
@@ -137,6 +163,206 @@ def create_app() -> Flask:
             return "No fue posible conectarse al servidor SFTP. Asegurate de que esté en línea y accesible."
         return text
 
+    def _build_remote_plan(name: str, remote_type: str, settings: dict) -> RemotePlan:
+        base_args = ["config", "create", "--non-interactive", name]
+        normalized_type = (remote_type or "").strip().lower()
+        plan = RemotePlan(command=[], pre_commands=[], post_commands=[])
+
+        if normalized_type == "drive":
+            mode = (settings.get("mode") or "").strip().lower()
+            token = (settings.get("token") or "").strip()
+            if not mode:
+                mode = "custom" if token else "shared"
+            if mode not in {"shared", "custom"}:
+                raise RemoteOperationError("invalid drive mode")
+            if mode == "shared":
+                base_remote = _normalize_remote(os.getenv("RCLONE_REMOTE", "gdrive"))
+                folder_name = (settings.get("folder_name") or name or "").strip()
+                if not folder_name:
+                    raise RemoteOperationError("folder name is required")
+                drive_remote_path = f"{base_remote}{folder_name}"
+                ensure_default_drive_remote()
+                plan.pre_commands.append(["mkdir", drive_remote_path])
+                plan.command = [
+                    *base_args,
+                    "alias",
+                    "remote",
+                    drive_remote_path,
+                ]
+                plan.cleanup_on_error = True
+                plan.drive_mode = "shared"
+                plan.drive_remote_path = drive_remote_path
+            else:
+                if not token:
+                    raise RemoteOperationError("token is required")
+                plan.command = [
+                    *base_args,
+                    "drive",
+                    "token",
+                    token,
+                    "scope",
+                    os.getenv("RCLONE_DRIVE_SCOPE", "drive"),
+                    "--no-auto-auth",
+                ]
+                client_id = (settings.get("client_id") or "").strip() or os.getenv(
+                    "RCLONE_DRIVE_CLIENT_ID"
+                )
+                client_secret = (
+                    (settings.get("client_secret") or "").strip()
+                    or os.getenv("RCLONE_DRIVE_CLIENT_SECRET")
+                )
+                if client_id:
+                    plan.command.extend(["client_id", client_id])
+                if client_secret:
+                    plan.command.extend(["client_secret", client_secret])
+        elif normalized_type == "local":
+            directories = {entry["path"] for entry in get_local_directories()}
+            if not directories:
+                raise RemoteOperationError("no local directories configured", 500)
+            path = (settings.get("path") or "").strip()
+            if not path:
+                raise RemoteOperationError("path is required")
+            if path not in directories:
+                raise RemoteOperationError("invalid path")
+            plan.command = [*base_args, "alias", "remote", path]
+        elif normalized_type == "sftp":
+            host = (settings.get("host") or "").strip()
+            username = (settings.get("username") or settings.get("user") or "").strip()
+            password = (settings.get("password") or "").strip()
+            port = (settings.get("port") or "").strip()
+            base_path = (settings.get("base_path") or "").strip()
+            if not host:
+                raise RemoteOperationError("host is required")
+            if not username:
+                raise RemoteOperationError("username is required")
+            if not password:
+                raise RemoteOperationError("password is required")
+            if port and not port.isdigit():
+                raise RemoteOperationError("invalid port")
+            if not base_path:
+                raise RemoteOperationError(
+                    "Seleccioná la carpeta del servidor SFTP donde se crearán los respaldos."
+                )
+            normalized_base = _normalize_sftp_base_path(base_path)
+            try:
+                target_path = _join_sftp_folder(normalized_base, name)
+            except ValueError:
+                raise RemoteOperationError(
+                    "El nombre del remote no es válido para crear una carpeta en SFTP."
+                )
+            plan.command = [
+                *base_args,
+                "sftp",
+                "host",
+                host,
+                "user",
+                username,
+            ]
+            if port:
+                plan.command.extend(["port", port])
+            plan.command.extend(["path", target_path, "pass", password])
+            plan.post_commands = [["mkdir", f"{name}:"], ["lsd", f"{name}:"]]
+            plan.cleanup_on_error = True
+            plan.error_translator = _translate_sftp_error
+        elif normalized_type == "onedrive":
+            raise RemoteOperationError("OneDrive aún está en construcción")
+        else:
+            raise RemoteOperationError("unsupported remote type")
+
+        if not plan.command:
+            raise RemoteOperationError("unsupported remote type")
+
+        return plan
+
+    def _execute_remote_plan(name: str, plan: RemotePlan) -> str | None:
+        for extra in plan.pre_commands:
+            try:
+                run_rclone(extra, capture_output=True, text=True, check=True)
+            except subprocess.CalledProcessError as exc:
+                error = (exc.stderr or exc.stdout or "").strip() or "failed to prepare remote"
+                raise RemoteOperationError(error) from exc
+
+        try:
+            run_rclone(plan.command, capture_output=True, text=True, check=True)
+        except subprocess.CalledProcessError as exc:
+            error = (exc.stderr or exc.stdout or "").strip() or "failed to create remote"
+            if plan.error_translator:
+                error = plan.error_translator(error)
+            raise RemoteOperationError(error) from exc
+
+        for extra in plan.post_commands:
+            try:
+                run_rclone(extra, capture_output=True, text=True, check=True)
+            except subprocess.CalledProcessError as exc:
+                if plan.cleanup_on_error:
+                    try:
+                        run_rclone(
+                            ["config", "delete", name],
+                            capture_output=True,
+                            text=True,
+                            check=True,
+                        )
+                    except Exception:
+                        pass
+                error = (exc.stderr or exc.stdout or "").strip() or "failed to create remote"
+                if plan.error_translator:
+                    error = plan.error_translator(error)
+                raise RemoteOperationError(error) from exc
+
+        share_url = None
+        if plan.drive_mode == "shared" and plan.drive_remote_path:
+            try:
+                share_url = _generate_drive_share_link(plan.drive_remote_path)
+            except DriveShareLinkError as exc:
+                if plan.cleanup_on_error:
+                    try:
+                        run_rclone(
+                            ["config", "delete", name],
+                            capture_output=True,
+                            text=True,
+                            check=True,
+                        )
+                    except Exception:
+                        pass
+                raise RemoteOperationError(str(exc), 500) from exc
+
+        return share_url
+
+    def _restore_remote_backup(remote_name: str, backup_name: str) -> bool:
+        try:
+            run_rclone(
+                ["config", "delete", remote_name],
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+        except subprocess.CalledProcessError:
+            pass
+        except RuntimeError:
+            return False
+
+        try:
+            run_rclone(
+                ["config", "copy", backup_name, remote_name],
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+        except (subprocess.CalledProcessError, RuntimeError):
+            return False
+        return True
+
+    def _delete_remote_safely(remote_name: str) -> None:
+        try:
+            run_rclone(
+                ["config", "delete", remote_name],
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+        except (subprocess.CalledProcessError, RuntimeError):
+            pass
+
     def login_required(func):
         @wraps(func)
         def wrapper(*args, **kwargs):
@@ -171,12 +397,6 @@ def create_app() -> Flask:
     def index() -> str:
         """Render main panel."""
         return render_template("index.html")
-
-    @app.route("/remotes")
-    @login_required
-    def remotes() -> str:
-        """Render rclone remotes management page."""
-        return render_template("remotes.html")
 
     @app.route("/rclone/config")
     @login_required
@@ -536,54 +756,35 @@ def create_app() -> Flask:
     def create_rclone_remote() -> tuple[dict, int]:
         """Create a new rclone remote."""
 
-        data = request.get_json(force=True)
-        if not data or not data.get("name") or not data.get("type"):
+        data = request.get_json(force=True) or {}
+        name = _normalize_remote_name(data.get("name"))
+        remote_type = (data.get("type") or "").strip().lower()
+        if not name or not remote_type:
             return {"error": "invalid payload"}, 400
         allowed_types = {"drive", "onedrive", "sftp", "local"}
-        remote_type = data["type"]
         if remote_type not in allowed_types:
             return {"error": "unsupported remote type"}, 400
-        name = (data.get("name") or "").strip()
-        if not name:
-            return {"error": "invalid payload"}, 400
 
         settings = data.get("settings") or {}
-        base_args = ["config", "create", "--non-interactive", name]
-        args: list[str]
-        pre_config_commands: list[list[str]] = []
-        post_config_commands: list[list[str]] = []
-        cleanup_remote_on_error = False
-        error_translator = None
-        share_url: str | None = None
-        drive_mode: str | None = None
-        drive_remote_path: str | None = None
+        try:
+            plan = _build_remote_plan(name, remote_type, settings)
+        except RemoteOperationError as exc:
+            return {"error": str(exc)}, exc.status_code
+        except DefaultDriveRemoteError as exc:
+            return {"error": str(exc)}, 500
 
-        if remote_type == "onedrive":
-            return {"error": "OneDrive aún está en construcción"}, 400
+        try:
+            share_url = _execute_remote_plan(name, plan)
+        except RemoteOperationError as exc:
+            return {"error": str(exc)}, exc.status_code
+        except RuntimeError:
+            return {"error": "rclone is not installed"}, 500
 
-        if remote_type == "drive":
-            mode = (settings.get("mode") or "").strip().lower()
-            token = (settings.get("token") or "").strip()
-            if not mode:
-                mode = "custom" if token else "shared"
-            if mode not in {"shared", "custom"}:
-                return {"error": "invalid drive mode"}, 400
-            if mode == "shared":
-                base_remote = _normalize_remote(
-                    os.getenv("RCLONE_REMOTE", "gdrive")
-                )
-                folder_name = (settings.get("folder_name") or name or "").strip()
-                if not folder_name:
-                    return {"error": "folder name is required"}, 400
-                drive_remote_path = f"{base_remote}{folder_name}"
-                try:
-                    ensure_default_drive_remote()
-                except DefaultDriveRemoteError as exc:
-                    return {"error": str(exc)}, 500
-                pre_config_commands = [["mkdir", drive_remote_path]]
-                args = base_args + ["alias", "remote", drive_remote_path]
-                cleanup_remote_on_error = True
-                drive_mode = "shared"
+        with SessionLocal() as db:
+            existing = db.query(RcloneRemote).filter_by(name=name).one_or_none()
+            if existing:
+                existing.type = remote_type
+                existing.share_url = share_url
             else:
                 if not token:
                     return {"error": "token is required"}, 400
@@ -661,63 +862,128 @@ def create_app() -> Flask:
         else:
             return {"error": "unsupported remote type"}, 400
 
+        settings = data.get("settings") or {}
         try:
-            for extra_args in pre_config_commands:
-                run_rclone(extra_args, capture_output=True, text=True, check=True)
-            run_rclone(args, capture_output=True, text=True, check=True)
-            for extra_args in post_config_commands:
-                try:
-                    run_rclone(extra_args, capture_output=True, text=True, check=True)
-                except subprocess.CalledProcessError as exc:
-                    try:
-                        if cleanup_remote_on_error:
-                            run_rclone(
-                                ["config", "delete", name],
-                                capture_output=True,
-                                text=True,
-                                check=True,
-                            )
-                    except Exception:
-                        pass
-                    error = (exc.stderr or exc.stdout or "").strip() or "failed to create remote"
-                    if error_translator:
-                        error = error_translator(error)
-                    return {"error": error}, 400
-            if remote_type == "drive" and drive_mode == "shared" and drive_remote_path:
-                share_url = _generate_drive_share_link(drive_remote_path)
-        except DriveShareLinkError as exc:
-            if cleanup_remote_on_error:
-                try:
-                    run_rclone(
-                        ["config", "delete", name],
-                        capture_output=True,
-                        text=True,
-                        check=True,
-                    )
-                except Exception:
-                    pass
+            configured = fetch_configured_remotes()
+        except RuntimeError:
+            return {"error": "rclone is not installed"}, 500
+        if normalized_name not in configured:
+            return {"error": "remote not found"}, 404
+
+        try:
+            plan = _build_remote_plan(normalized_name, remote_type, settings)
+        except RemoteOperationError as exc:
+            return {"error": str(exc)}, exc.status_code
+        except DefaultDriveRemoteError as exc:
             return {"error": str(exc)}, 500
+
+        backup_name = f"__backup__{uuid.uuid4().hex[:8]}"
+        try:
+            run_rclone(
+                ["config", "copy", normalized_name, backup_name],
+                capture_output=True,
+                text=True,
+                check=True,
+            )
         except RuntimeError:
             return {"error": "rclone is not installed"}, 500
         except subprocess.CalledProcessError as exc:
-            error = (exc.stderr or exc.stdout or "").strip() or "failed to create remote"
-            if error_translator:
-                error = error_translator(error)
-            return {"error": error}, 400
+            message = (exc.stderr or exc.stdout or "").strip() or "No se pudo preparar la edición del remote."
+            _delete_remote_safely(backup_name)
+            return {"error": message}, 400
+
+        try:
+            run_rclone(
+                ["config", "delete", normalized_name],
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+        except RuntimeError:
+            _delete_remote_safely(backup_name)
+            return {"error": "rclone is not installed"}, 500
+        except subprocess.CalledProcessError as exc:
+            message = (exc.stderr or exc.stdout or "").strip() or "No se pudo reemplazar el remote."
+            _delete_remote_safely(backup_name)
+            return {"error": message}, 400
+
+        try:
+            share_url = _execute_remote_plan(normalized_name, plan)
+        except RemoteOperationError as exc:
+            restored = _restore_remote_backup(normalized_name, backup_name)
+            _delete_remote_safely(backup_name)
+            if not restored:
+                return {
+                    "error": f"{exc}. No se pudo restaurar la configuración original.",
+                }, 500
+            return {"error": str(exc)}, exc.status_code
+        except RuntimeError:
+            restored = _restore_remote_backup(normalized_name, backup_name)
+            _delete_remote_safely(backup_name)
+            if not restored:
+                return {
+                    "error": "rclone is not installed. No se pudo restaurar la configuración original.",
+                }, 500
+            return {"error": "rclone is not installed"}, 500
+
+        _delete_remote_safely(backup_name)
 
         with SessionLocal() as db:
-            existing = db.query(RcloneRemote).filter_by(name=name).one_or_none()
+            existing = db.query(RcloneRemote).filter_by(name=normalized_name).one_or_none()
             if existing:
                 existing.type = remote_type
                 existing.share_url = share_url
             else:
-                db.add(RcloneRemote(name=name, type=remote_type, share_url=share_url))
+                db.add(
+                    RcloneRemote(
+                        name=normalized_name,
+                        type=remote_type,
+                        share_url=share_url,
+                    )
+                )
             db.commit()
 
         response = {"status": "ok"}
         if share_url:
             response["share_url"] = share_url
-        return response, 201
+        return response, 200
+
+    @app.delete("/rclone/remotes/<remote_name>")
+    @login_required
+    def delete_rclone_remote(remote_name: str) -> tuple[dict, int]:
+        """Remove an rclone remote and stored metadata."""
+
+        normalized_name = _normalize_remote_name(remote_name)
+        if not normalized_name:
+            return {"error": "remote not found"}, 404
+
+        try:
+            configured = fetch_configured_remotes()
+        except RuntimeError:
+            return {"error": "rclone is not installed"}, 500
+        if normalized_name not in configured:
+            return {"error": "remote not found"}, 404
+
+        try:
+            run_rclone(
+                ["config", "delete", normalized_name],
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+        except RuntimeError:
+            return {"error": "rclone is not installed"}, 500
+        except subprocess.CalledProcessError as exc:
+            message = (exc.stderr or exc.stdout or "").strip() or "failed to delete remote"
+            return {"error": message}, 400
+
+        with SessionLocal() as db:
+            existing = db.query(RcloneRemote).filter_by(name=normalized_name).one_or_none()
+            if existing:
+                db.delete(existing)
+            db.commit()
+
+        return {"status": "ok"}, 200
 
     @app.post("/apps")
     @login_required
