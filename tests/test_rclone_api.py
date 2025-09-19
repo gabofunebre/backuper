@@ -330,7 +330,7 @@ def test_create_rclone_remote_shared_success(monkeypatch, app):
         assert stored.share_url == "https://drive.google.com/drive/folders/abc123"
 
 
-def test_create_rclone_remote_local_success(monkeypatch, app):
+def test_create_rclone_remote_local_success(monkeypatch, app, tmp_path):
     calls: list[list[str]] = []
 
     class DummyResult:
@@ -341,7 +341,7 @@ def test_create_rclone_remote_local_success(monkeypatch, app):
         calls.append(cmd)
         return DummyResult()
 
-    monkeypatch.setenv("RCLONE_LOCAL_DIRECTORIES", "/backups")
+    monkeypatch.setenv("RCLONE_LOCAL_DIRECTORIES", str(tmp_path))
     monkeypatch.setattr(subprocess, "run", fake_run)
     client = app.test_client()
     client.post("/login", data={"username": "admin", "password": "secret"})
@@ -350,14 +350,15 @@ def test_create_rclone_remote_local_success(monkeypatch, app):
         json={
             "name": "localbackup",
             "type": "local",
-            "settings": {"path": "/backups"},
+            "settings": {"path": str(tmp_path)},
         },
     )
     assert resp.status_code == 201
+    expected_path = tmp_path / "localbackup"
     assert resp.get_json() == {
         "status": "ok",
-        "route": "/backups",
-        "share_url": "/backups",
+        "route": str(expected_path),
+        "share_url": str(expected_path),
     }
     assert len(calls) == 1
     cmd = calls[0]
@@ -371,10 +372,11 @@ def test_create_rclone_remote_local_success(monkeypatch, app):
         "alias",
         "remote",
     ]
-    assert cmd[9] == "/backups"
+    assert cmd[9] == str(expected_path)
+    assert expected_path.is_dir()
 
 
-def test_update_rclone_remote_local_success(monkeypatch, app):
+def test_update_rclone_remote_local_success(monkeypatch, app, tmp_path):
     commands: list[list[str]] = []
 
     class DummyResult:
@@ -388,20 +390,25 @@ def test_update_rclone_remote_local_success(monkeypatch, app):
             return DummyResult(stdout="foo:\n")
         return DummyResult()
 
-    monkeypatch.setenv("RCLONE_LOCAL_DIRECTORIES", "/datos")
+    monkeypatch.setenv("RCLONE_LOCAL_DIRECTORIES", str(tmp_path))
     monkeypatch.setattr(subprocess, "run", fake_run)
+
+    base_folder = tmp_path
+    target_folder = base_folder / "foo"
 
     client = app.test_client()
     client.post("/login", data={"username": "admin", "password": "secret"})
     resp = client.put(
         "/rclone/remotes/foo",
-        json={"name": "foo", "type": "local", "settings": {"path": "/datos"}},
+        json={"name": "foo", "type": "local", "settings": {"path": str(base_folder)}}
     )
     assert resp.status_code == 200
+    expected_path = target_folder
     assert resp.get_json() == {
         "status": "ok",
-        "route": "/datos",
-        "share_url": "/datos",
+        "route": str(expected_path),
+        "share_url": str(expected_path),
+        "name": "foo",
     }
 
     config_path = os.getenv("RCLONE_CONFIG")
@@ -421,7 +428,7 @@ def test_update_rclone_remote_local_success(monkeypatch, app):
         "alias",
         "remote",
     ]
-    assert create_cmd[9] == "/datos"
+    assert create_cmd[9] == str(expected_path)
     assert commands[4] == [
         "rclone",
         "--config",
@@ -437,10 +444,11 @@ def test_update_rclone_remote_local_success(monkeypatch, app):
     with SessionLocal() as db:
         stored = db.query(RcloneRemote).filter_by(name="foo").one()
         assert stored.type == "local"
-        assert stored.share_url == "/datos"
+        assert stored.share_url == str(expected_path)
+    assert expected_path.is_dir()
 
 
-def test_update_rclone_remote_failure_restores_backup(monkeypatch, app):
+def test_update_rclone_remote_failure_restores_backup(monkeypatch, app, tmp_path):
     commands: list[list[str]] = []
 
     class DummyResult:
@@ -456,14 +464,14 @@ def test_update_rclone_remote_failure_restores_backup(monkeypatch, app):
             raise subprocess.CalledProcessError(1, cmd, stderr="boom")
         return DummyResult()
 
-    monkeypatch.setenv("RCLONE_LOCAL_DIRECTORIES", "/datos")
+    monkeypatch.setenv("RCLONE_LOCAL_DIRECTORIES", str(tmp_path))
     monkeypatch.setattr(subprocess, "run", fake_run)
 
     client = app.test_client()
     client.post("/login", data={"username": "admin", "password": "secret"})
     resp = client.put(
         "/rclone/remotes/foo",
-        json={"name": "foo", "type": "local", "settings": {"path": "/datos"}},
+        json={"name": "foo", "type": "local", "settings": {"path": str(tmp_path)}}
     )
     assert resp.status_code == 400
     assert resp.get_json() == {"error": "boom"}
@@ -492,6 +500,7 @@ def test_update_rclone_remote_failure_restores_backup(monkeypatch, app):
         "delete",
         backup_name,
     ]
+    assert not (tmp_path / "foo").exists()
 
 
 def test_update_rclone_remote_not_found(monkeypatch, app):
@@ -552,6 +561,63 @@ def test_delete_rclone_remote_success(monkeypatch, app):
 
     with SessionLocal() as db:
         assert db.query(RcloneRemote).filter_by(name="foo").count() == 0
+
+
+def test_delete_rclone_remote_local_removes_folder(monkeypatch, app, tmp_path):
+    commands: list[list[str]] = []
+
+    class DummyResult:
+        def __init__(self, stdout: str = "", stderr: str = "") -> None:
+            self.stdout = stdout
+            self.stderr = stderr
+
+    def fake_run(cmd, capture_output, text, check):
+        commands.append(cmd)
+        if cmd[-1] == "listremotes":
+            return DummyResult(stdout="foo:\n")
+        return DummyResult()
+
+    base_folder = tmp_path
+    remote_folder = base_folder / "foo"
+    remote_folder.mkdir()
+    monkeypatch.setenv("RCLONE_LOCAL_DIRECTORIES", str(base_folder))
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    from orchestrator.app import SessionLocal
+    from orchestrator.app.models import RcloneRemote, App
+
+    with SessionLocal() as db:
+        db.add(RcloneRemote(name="foo", type="local", share_url=str(remote_folder)))
+        db.add(
+            App(
+                name="demo",
+                url="http://demo",
+                token="tok",
+                rclone_remote="foo:",
+            )
+        )
+        db.commit()
+
+    client = app.test_client()
+    client.post("/login", data={"username": "admin", "password": "secret"})
+    resp = client.delete("/rclone/remotes/foo")
+    assert resp.status_code == 200
+    assert resp.get_json() == {"status": "ok", "removed_path": str(remote_folder)}
+
+    config_path = os.getenv("RCLONE_CONFIG")
+    assert commands[0] == ["rclone", "--config", config_path, "listremotes"]
+    copy_cmd = commands[1]
+    assert copy_cmd[:6] == ["rclone", "--config", config_path, "config", "copy", "foo"]
+    backup_name = copy_cmd[6]
+    assert commands[2] == ["rclone", "--config", config_path, "config", "delete", "foo"]
+    assert commands[3] == ["rclone", "--config", config_path, "config", "delete", backup_name]
+
+    assert not remote_folder.exists()
+
+    with SessionLocal() as db:
+        assert db.query(RcloneRemote).filter_by(name="foo").count() == 0
+        app_entry = db.query(App).filter_by(name="demo").one()
+        assert app_entry.rclone_remote is None
 
 
 def test_delete_rclone_remote_not_found(monkeypatch, app):

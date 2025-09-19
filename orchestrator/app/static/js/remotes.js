@@ -1,6 +1,168 @@
 const directoryCache = {};
 let driveValidation = { status: 'idle', token: '' };
 let editingRemote = null;
+let deleteModalInstance = null;
+let pendingRemoteDeletion = null;
+let adminEmail = '';
+
+function getAdminEmail() {
+  if (adminEmail) {
+    return adminEmail;
+  }
+  const configNode = document.getElementById('remote-config-data');
+  if (configNode && typeof configNode.dataset.adminEmail === 'string') {
+    adminEmail = configNode.dataset.adminEmail || '';
+  }
+  return adminEmail;
+}
+
+function normalizeLocalPath(path) {
+  if (path === null || path === undefined) {
+    return '';
+  }
+  let value = String(path).trim();
+  if (!value) {
+    return '';
+  }
+  value = value.replace(/\\+/g, '/');
+  const driveMatch = value.match(/^([A-Za-z]:)(?:\/)?$/);
+  if (driveMatch) {
+    return `${driveMatch[1]}/`;
+  }
+  if (value.length > 1 && value.endsWith('/')) {
+    value = value.replace(/\/+$/, '');
+    if (!value) {
+      value = '/';
+    }
+  }
+  return value;
+}
+
+function joinLocalPath(base, name) {
+  const normalizedBase = normalizeLocalPath(base);
+  const segment = String(name ?? '').trim();
+  if (!normalizedBase) {
+    return '';
+  }
+  if (!segment) {
+    return normalizedBase;
+  }
+  if (/^[A-Za-z]:\/$/.test(normalizedBase)) {
+    return `${normalizedBase}${segment}`;
+  }
+  if (/^[A-Za-z]:$/.test(normalizedBase)) {
+    return `${normalizedBase}/${segment}`;
+  }
+  if (normalizedBase === '/') {
+    return `/${segment}`;
+  }
+  return `${normalizedBase}/${segment}`;
+}
+
+function getLocalParentPath(path) {
+  const normalized = normalizeLocalPath(path);
+  if (!normalized) {
+    return '';
+  }
+  if (normalized === '/') {
+    return '/';
+  }
+  if (/^[A-Za-z]:\/$/.test(normalized)) {
+    return normalized;
+  }
+  if (/^[A-Za-z]:$/.test(normalized)) {
+    return normalized;
+  }
+  const index = normalized.lastIndexOf('/');
+  if (index <= 0) {
+    return normalized.startsWith('/') ? '/' : normalized;
+  }
+  const parent = normalized.slice(0, index);
+  if (!parent) {
+    return normalized.startsWith('/') ? '/' : parent;
+  }
+  if (/^[A-Za-z]:$/.test(parent)) {
+    return parent;
+  }
+  return parent;
+}
+
+function updateLocalSummary() {
+  const summary = document.getElementById('local-path-summary');
+  if (!summary) return;
+  const select = document.getElementById('local_path');
+  const basePath = select ? select.value.trim() : '';
+  const nameInput = document.getElementById('remote_name');
+  const remoteName = nameInput ? nameInput.value.trim() : '';
+  const editingLocal = Boolean(
+    editingRemote && editingRemote.type && editingRemote.type.toLowerCase() === 'local',
+  );
+  const currentRoute = editingLocal
+    ? normalizeLocalPath(editingRemote.route || editingRemote.share_url || '')
+    : '';
+  const normalizedBasePath = normalizeLocalPath(basePath);
+  summary.classList.remove('text-muted', 'text-success', 'text-warning');
+  if (!basePath) {
+    summary.textContent = 'Elegí una carpeta disponible para preparar el remote.';
+    summary.classList.add('text-muted');
+    return;
+  }
+  if (!remoteName) {
+    summary.textContent = 'Completá el nombre del remote para confirmar la carpeta a utilizar.';
+    summary.classList.add('text-muted');
+    return;
+  }
+  const targetPath = joinLocalPath(basePath, remoteName);
+  if (!targetPath) {
+    summary.textContent = 'No se pudo determinar la carpeta destino. Revisá los datos ingresados.';
+    summary.classList.add('text-warning');
+    return;
+  }
+  const normalizedTarget = normalizeLocalPath(targetPath);
+  if (editingLocal && currentRoute) {
+    const readableCurrent = editingRemote.route || editingRemote.share_url || currentRoute;
+    if (currentRoute === normalizedTarget) {
+      summary.textContent = `La carpeta actual se mantendrá en ${targetPath}.`;
+    } else if (normalizedBasePath && currentRoute === normalizedBasePath) {
+      summary.textContent = `Vamos a crear la carpeta ${targetPath} y mover allí los archivos existentes de ${readableCurrent}.`;
+    } else {
+      summary.textContent = `La carpeta se moverá de ${readableCurrent} a ${targetPath}.`;
+    }
+  } else {
+    summary.textContent = `Se creará la carpeta ${targetPath} para guardar los respaldos.`;
+  }
+  summary.classList.add('text-success');
+}
+
+function initDeleteModal() {
+  const modalElement = document.getElementById('remote-delete-modal');
+  if (!modalElement || typeof bootstrap === 'undefined' || !bootstrap.Modal) {
+    return;
+  }
+  deleteModalInstance = new bootstrap.Modal(modalElement);
+  const confirmButton = document.getElementById('remote-delete-confirm');
+  if (confirmButton) {
+    confirmButton.addEventListener('click', async () => {
+      if (!pendingRemoteDeletion) {
+        deleteModalInstance.hide();
+        return;
+      }
+      const target = pendingRemoteDeletion;
+      pendingRemoteDeletion = null;
+      confirmButton.disabled = true;
+      try {
+        deleteModalInstance.hide();
+        await handleRemoteDelete(target);
+      } finally {
+        confirmButton.disabled = false;
+      }
+    });
+  }
+  modalElement.addEventListener('hidden.bs.modal', () => {
+    pendingRemoteDeletion = null;
+  });
+}
+
 const sftpState = {
   credentials: null,
   currentPath: '/',
@@ -366,10 +528,16 @@ async function loadRemotes() {
       }
     }
     remotes.forEach((entry) => {
-      const remote = typeof entry === 'string' ? { name: entry } : entry || {};
-      const name = remote.name || '';
-      const remoteType = (remote.type || '').toLowerCase();
-      const route = remote.route || remote.share_url || '';
+      const rawRemote = typeof entry === 'string' ? { name: entry } : entry || {};
+      const name = (rawRemote.name || '').trim();
+      const route = rawRemote.route || rawRemote.share_url || '';
+      const normalizedRemote = {
+        ...rawRemote,
+        name,
+        route,
+        share_url: rawRemote.share_url || route,
+      };
+      const remoteType = (normalizedRemote.type || '').toLowerCase();
       if (tbody) {
         const tr = document.createElement('tr');
 
@@ -407,20 +575,20 @@ async function loadRemotes() {
         editBtn.type = 'button';
         editBtn.className = 'btn btn-outline-secondary btn-sm me-2';
         editBtn.innerHTML = '<span aria-hidden="true">&#9998;</span><span class="visually-hidden">Editar</span>';
-        editBtn.addEventListener('click', () => startRemoteEdit(remote));
+        editBtn.addEventListener('click', () => startRemoteEdit(normalizedRemote));
         actionsCell.appendChild(editBtn);
 
         const deleteBtn = document.createElement('button');
         deleteBtn.type = 'button';
         deleteBtn.className = 'btn btn-outline-danger btn-sm';
         deleteBtn.innerHTML = '<span aria-hidden="true">&times;</span><span class="visually-hidden">Eliminar</span>';
-        deleteBtn.addEventListener('click', () => confirmRemoteDeletion(remote));
+        deleteBtn.addEventListener('click', () => confirmRemoteDeletion(normalizedRemote));
         actionsCell.appendChild(deleteBtn);
 
         tr.appendChild(actionsCell);
         tbody.appendChild(tr);
       }
-      if (select) {
+      if (select && name) {
         const opt = document.createElement('option');
         opt.value = name;
         opt.textContent = name;
@@ -502,6 +670,7 @@ function exitRemoteEditMode({ resetForm = false } = {}) {
     resetSftpBrowser(true);
     showFeedback('', 'info');
   }
+  updateLocalSummary();
 }
 
 function startRemoteEdit(remote) {
@@ -521,7 +690,7 @@ function startRemoteEdit(remote) {
   const nameInput = document.getElementById('remote_name');
   if (nameInput) {
     nameInput.value = remote.name;
-    nameInput.disabled = true;
+    nameInput.focus();
   }
   const typeSelect = document.getElementById('remote_type');
   if (typeSelect) {
@@ -540,7 +709,7 @@ function startRemoteEdit(remote) {
     cancelButton.classList.remove('d-none');
   }
   showFeedback(
-    `Editando el remote ${remote.name}. Completá los datos y guardá para aplicar los cambios.`,
+    `Editando el remote ${remote.name}. Podés actualizar los datos e incluso cambiar el nombre antes de guardar.`,
     'info',
   );
   const normalizedType = (remote.type || '').toLowerCase();
@@ -548,32 +717,107 @@ function startRemoteEdit(remote) {
   if (normalizedType === 'sftp' && storedRoute) {
     updateSftpSelectedPath(storedRoute);
   }
-  if (normalizedType === 'local' && storedRoute) {
+  if (normalizedType === 'local') {
     const select = document.getElementById('local_path');
     if (select) {
-      select.value = storedRoute;
+      const parentPath = getLocalParentPath(storedRoute);
+      if (parentPath) {
+        select.value = parentPath;
+      }
     }
   }
+  updateLocalSummary();
 }
 
 function confirmRemoteDeletion(remote) {
   if (!remote || !remote.name) {
     return;
   }
-  const confirmed = window.confirm(
-    `¿Seguro que querés eliminar el remote "${remote.name}"? Esta acción no se puede deshacer.`,
-  );
-  if (!confirmed) {
+  const remoteType = (remote.type || '').toLowerCase();
+  const route = remote.route || remote.share_url || '';
+  const modalElement = document.getElementById('remote-delete-modal');
+  if (!modalElement || typeof bootstrap === 'undefined' || !bootstrap.Modal) {
+    let fallbackMessage = `¿Seguro que querés eliminar el remote "${remote.name}"? Esta acción no se puede deshacer.`;
+    if (remoteType === 'local') {
+      fallbackMessage += route
+        ? ` Se eliminará la carpeta ${route} con todos sus archivos.`
+        : ' Se eliminarán los archivos locales asociados.';
+      const admin = getAdminEmail();
+      if (admin) {
+        fallbackMessage += ` Si necesitás conservarlos contactá al administrador en ${admin}.`;
+      }
+    }
+    const confirmed = window.confirm(fallbackMessage);
+    if (!confirmed) {
+      return;
+    }
+    handleRemoteDelete(remote);
     return;
   }
-  handleRemoteDelete(remote);
+  if (!deleteModalInstance) {
+    deleteModalInstance = new bootstrap.Modal(modalElement);
+  }
+  pendingRemoteDeletion = { ...remote };
+  const nameTarget = document.getElementById('remote-delete-name');
+  if (nameTarget) {
+    nameTarget.textContent = remote.name;
+  }
+  const impactTarget = document.getElementById('remote-delete-impact');
+  if (impactTarget) {
+    if (remoteType === 'local') {
+      impactTarget.textContent =
+        'Esta acción borrará la configuración y todos los archivos guardados en su carpeta local.';
+    } else {
+      impactTarget.textContent =
+        'Esta acción borrará la configuración almacenada en el orquestador.';
+    }
+  }
+  const routeTarget = document.getElementById('remote-delete-route');
+  const routeWrapper = document.getElementById('remote-delete-route-wrapper');
+  if (routeTarget) {
+    if (route && remoteType === 'local') {
+      routeTarget.textContent = route;
+      if (routeWrapper) {
+        routeWrapper.classList.remove('d-none');
+      }
+    } else {
+      routeTarget.textContent = '';
+      if (routeWrapper) {
+        routeWrapper.classList.add('d-none');
+      }
+    }
+  }
+  const emailValue = getAdminEmail();
+  const emailLink = document.getElementById('remote-delete-admin-email');
+  const emailWrapper = document.getElementById('remote-delete-admin-wrapper');
+  if (emailLink) {
+    if (emailValue) {
+      emailLink.textContent = emailValue;
+      emailLink.href = `mailto:${emailValue}`;
+      if (emailWrapper) {
+        emailWrapper.classList.remove('d-none');
+      }
+    } else {
+      emailLink.textContent = '';
+      emailLink.removeAttribute('href');
+      if (emailWrapper) {
+        emailWrapper.classList.add('d-none');
+      }
+    }
+  }
+  deleteModalInstance.show();
 }
 
 async function handleRemoteDelete(remote) {
   if (!remote || !remote.name) {
     return;
   }
-  toggleRemoteOverlay(true, 'Eliminando remote…');
+  const remoteType = (remote.type || '').toLowerCase();
+  const overlayMessage =
+    remoteType === 'local'
+      ? 'Eliminando el remote y su carpeta local…'
+      : 'Eliminando remote…';
+  toggleRemoteOverlay(true, overlayMessage);
   try {
     const resp = await fetch(`/rclone/remotes/${encodeURIComponent(remote.name)}`, {
       method: 'DELETE',
@@ -587,7 +831,16 @@ async function handleRemoteDelete(remote) {
       if (editingRemote && editingRemote.name === remote.name) {
         exitRemoteEditMode({ resetForm: true });
       }
-      showFeedback('Remote eliminado correctamente.', 'success');
+      let successMessage = 'Remote eliminado correctamente.';
+      const removedPath =
+        data && typeof data.removed_path === 'string' ? data.removed_path.trim() : '';
+      if (removedPath) {
+        successMessage = `Remote eliminado correctamente. Se borró la carpeta ${removedPath}.`;
+      } else if (remoteType === 'local') {
+        successMessage =
+          'Remote eliminado correctamente. Se eliminaron los archivos locales asociados.';
+      }
+      showFeedback(successMessage, 'success');
       loadRemotes();
     } else {
       const message = data && data.error ? data.error : 'No se pudo eliminar el remote.';
@@ -604,6 +857,7 @@ function resetPanels() {
   document.querySelectorAll('[data-remote-panel]').forEach((panel) => {
     panel.classList.add('d-none');
   });
+  updateLocalSummary();
 }
 
 async function fetchDirectoryOptions(type) {
@@ -654,11 +908,13 @@ function populateDirectorySelect(select, directories, emptyMessageId) {
   });
   select.disabled = false;
   if (editingRemote && editingRemote.type === 'local') {
-    const target = editingRemote.route || editingRemote.share_url || '';
-    if (target) {
-      select.value = target;
+    const storedRoute = editingRemote.route || editingRemote.share_url || '';
+    const parentPath = getLocalParentPath(storedRoute);
+    if (parentPath) {
+      select.value = parentPath;
     }
   }
+  updateLocalSummary();
 }
 
 async function showPanelForType(type) {
@@ -786,6 +1042,18 @@ function initRemoteForm() {
     return;
   }
   initSftpBrowser();
+  const nameInput = document.getElementById('remote_name');
+  if (nameInput) {
+    nameInput.addEventListener('input', () => {
+      updateLocalSummary();
+    });
+  }
+  const localPathSelect = document.getElementById('local_path');
+  if (localPathSelect) {
+    localPathSelect.addEventListener('change', () => {
+      updateLocalSummary();
+    });
+  }
   const cancelButton = document.getElementById('remote-cancel-edit');
   if (cancelButton) {
     cancelButton.addEventListener('click', () => {
@@ -799,6 +1067,7 @@ function initRemoteForm() {
       const selected = event.target.value;
       showFeedback('', 'info');
       showPanelForType(selected);
+      updateLocalSummary();
     });
   }
   document.querySelectorAll('input[name="drive_mode"]').forEach((input) => {
@@ -811,19 +1080,19 @@ function initRemoteForm() {
     });
   });
   initDriveValidation();
+  form.addEventListener('reset', () => {
+    window.setTimeout(() => {
+      updateLocalSummary();
+    }, 0);
+  });
   form.addEventListener('submit', async (event) => {
     event.preventDefault();
     showFeedback('', 'info');
-    const nameInput = document.getElementById('remote_name');
     const type = typeSelect ? typeSelect.value : '';
     const name = nameInput ? nameInput.value.trim() : '';
     const isEditing = Boolean(editingRemote && editingRemote.name);
     if (!name) {
       showFeedback('Completá un nombre para el remote.', 'danger');
-      return;
-    }
-    if (isEditing && editingRemote && editingRemote.name && name !== editingRemote.name) {
-      showFeedback('El nombre del remote no puede modificarse desde esta pantalla.', 'danger');
       return;
     }
     if (!type) {
@@ -832,19 +1101,22 @@ function initRemoteForm() {
     }
 
     const payload = {
-      name: isEditing && editingRemote ? editingRemote.name : name,
+      name,
       type,
       settings: {},
     };
     let overlayMessage = isEditing ? 'Actualizando remote…' : 'Guardando remote…';
     if (type === 'local') {
       const select = document.getElementById('local_path');
-      const value = select ? select.value : '';
+      const value = select ? select.value.trim() : '';
       if (!value) {
         showFeedback('Seleccioná la carpeta local donde guardar los respaldos.', 'danger');
         return;
       }
       payload.settings.path = value;
+      overlayMessage = isEditing
+        ? 'Actualizando remote local…'
+        : 'Preparando carpeta local…';
     } else if (type === 'sftp') {
       const host = document.getElementById('sftp_host')?.value.trim() || '';
       const portValue = document.getElementById('sftp_port')?.value.trim() || '';
@@ -982,9 +1254,12 @@ function initRemoteForm() {
       toggleRemoteOverlay(false);
     }
   });
+  updateLocalSummary();
 }
 
 document.addEventListener('DOMContentLoaded', () => {
-  loadRemotes();
+  initDeleteModal();
   initRemoteForm();
+  loadRemotes();
+  updateLocalSummary();
 });
