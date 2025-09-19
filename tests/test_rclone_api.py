@@ -191,6 +191,39 @@ def test_create_rclone_remote_custom_success(monkeypatch, app):
     assert cmd[cmd.index("client_secret") + 1] == "sec"
 
 
+def test_create_rclone_remote_custom_retries_without_no_auto_auth(monkeypatch, app):
+    calls = []
+
+    class DummyResult:
+        stderr = ""
+        stdout = ""
+
+    def fake_run(cmd, capture_output, text, check):
+        calls.append(list(cmd))
+        if "--no-auto-auth" in cmd:
+            raise subprocess.CalledProcessError(
+                1, cmd, stderr="Error: unknown flag: --no-auto-auth"
+            )
+        return DummyResult()
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    client = app.test_client()
+    client.post("/login", data={"username": "admin", "password": "secret"})
+    resp = client.post(
+        "/rclone/remotes",
+        json={
+            "name": "foo",
+            "type": "drive",
+            "settings": {"mode": "custom", "token": "tok"},
+        },
+    )
+    assert resp.status_code == 201
+    assert resp.get_json() == {"status": "ok"}
+    assert len(calls) == 2
+    assert "--no-auto-auth" in calls[0]
+    assert "--no-auto-auth" not in calls[1]
+
+
 def test_create_rclone_remote_shared_success(monkeypatch, app):
     calls: list[list[str]] = []
 

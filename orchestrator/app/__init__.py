@@ -207,6 +207,16 @@ def create_app() -> Flask:
             return subprocess.run(cmd, **kwargs)
         except FileNotFoundError as exc:
             raise RuntimeError("rclone is not installed") from exc
+        except subprocess.CalledProcessError as exc:
+            message = (exc.stderr or exc.stdout or "").lower()
+            if (
+                "--no-auto-auth" in cmd
+                and "--no-auto-auth" in message
+                and "unknown flag" in message
+            ):
+                cleaned_cmd = [part for part in cmd if part != "--no-auto-auth"]
+                return subprocess.run(cleaned_cmd, **kwargs)
+            raise
 
     def fetch_configured_remotes() -> list[str]:
         """Return the list of remotes configured in rclone."""
