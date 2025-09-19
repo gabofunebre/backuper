@@ -190,6 +190,8 @@ def test_create_sftp_remote_success(monkeypatch):
 
     def fake_run(cmd, **kwargs):
         calls.append({"cmd": cmd, "kwargs": kwargs})
+        if "obscure" in cmd:
+            return SimpleNamespace(stdout="obscured-secret\n", stderr="")
         return SimpleNamespace(stdout="", stderr="")
 
     monkeypatch.setattr(app_module.subprocess, "run", fake_run)
@@ -213,20 +215,24 @@ def test_create_sftp_remote_success(monkeypatch):
         "route": "/srv/backups",
         "share_url": "/srv/backups",
     }
-    assert len(calls) == 3
-    create_cmd = calls[0]["cmd"]
+    assert len(calls) == 4
+    obscure_cmd = calls[0]["cmd"]
+    create_cmd = calls[1]["cmd"]
+    assert obscure_cmd[0] == "rclone"
+    assert "obscure" in obscure_cmd
+    assert obscure_cmd[-1] == "secret"
     assert create_cmd[0] == "rclone"
     assert "--non-interactive" in create_cmd
     assert "sftp" in create_cmd
     assert "host" in create_cmd and create_cmd[create_cmd.index("host") + 1] == "sftp.internal"
     assert "user" in create_cmd and create_cmd[create_cmd.index("user") + 1] == "backup"
-    assert "pass" in create_cmd and create_cmd[create_cmd.index("pass") + 1] == "secret"
+    assert "pass" in create_cmd and create_cmd[create_cmd.index("pass") + 1] == "obscured-secret"
     assert "port" in create_cmd and create_cmd[create_cmd.index("port") + 1] == "2222"
     path_index = create_cmd.index("path")
     assert create_cmd[path_index + 1] == "/srv/backups/sftp1"
-    mkdir_cmd = calls[1]["cmd"]
+    mkdir_cmd = calls[2]["cmd"]
     assert mkdir_cmd[-2:] == ["mkdir", "sftp1:"]
-    lsd_cmd = calls[2]["cmd"]
+    lsd_cmd = calls[3]["cmd"]
     assert lsd_cmd[-2:] == ["lsd", "sftp1:"]
 
 
@@ -290,6 +296,8 @@ def test_create_sftp_remote_connection_failure(monkeypatch):
 
     def fake_run(cmd, **kwargs):
         calls.append(cmd)
+        if "obscure" in cmd:
+            return SimpleNamespace(stdout="obscured-secret\n", stderr="")
         if "config" in cmd and "create" in cmd:
             return SimpleNamespace(stdout="", stderr="")
         if cmd[-2:] == ["lsd", "sftp1:"]:

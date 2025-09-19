@@ -253,6 +253,8 @@ def create_app() -> Flask:
                 raise RemoteOperationError(
                     "El nombre del remote no es válido para crear una carpeta en SFTP."
                 )
+            obscured_password = _obscure_rclone_secret(password)
+
             plan.command = [
                 *base_args,
                 "sftp",
@@ -263,7 +265,7 @@ def create_app() -> Flask:
             ]
             if port:
                 plan.command.extend(["port", port])
-            plan.command.extend(["path", target_path, "pass", password])
+            plan.command.extend(["path", target_path, "pass", obscured_password])
             plan.post_commands = [["mkdir", f"{name}:"], ["lsd", f"{name}:"]]
             plan.cleanup_on_error = True
             plan.error_translator = _translate_sftp_error
@@ -446,6 +448,33 @@ def create_app() -> Flask:
                 cleaned_cmd = [part for part in cmd if part != "--no-auto-auth"]
                 return subprocess.run(cleaned_cmd, **kwargs)
             raise
+
+    def _obscure_rclone_secret(secret: str, *, config_path: str | None = None) -> str:
+        """Return the obscured representation of *secret* using rclone."""
+
+        args: list[str] = []
+        if config_path:
+            args.extend(["--config", config_path])
+        args.extend(["obscure", secret])
+        try:
+            result = run_rclone(
+                args, capture_output=True, text=True, check=True
+            )
+        except RuntimeError as exc:
+            raise RemoteOperationError("rclone is not installed", 500) from exc
+        except subprocess.CalledProcessError as exc:
+            raise RemoteOperationError(
+                "No se pudo cifrar la contraseña para rclone. Reintentá más tarde.",
+                500,
+            ) from exc
+
+        obscured = (result.stdout or "").strip()
+        if not obscured:
+            raise RemoteOperationError(
+                "No se pudo cifrar la contraseña para rclone. Reintentá más tarde.",
+                500,
+            )
+        return obscured
 
     def _generate_drive_share_link(target: str) -> str:
         """Create or fetch a public sharing link for *target* in Google Drive."""
@@ -646,7 +675,8 @@ def create_app() -> Flask:
             ]
             if port:
                 args.extend(["port", port])
-            args.extend(["pass", password])
+            obscured_password = _obscure_rclone_secret(password, config_path=temp_path)
+            args.extend(["pass", obscured_password])
             run_rclone(args, capture_output=True, text=True, check=True)
             target = "__probe__:"
             if normalized_path != "/":
@@ -663,6 +693,8 @@ def create_app() -> Flask:
                 text=True,
                 check=True,
             )
+        except RemoteOperationError as exc:
+            return {"error": str(exc)}, exc.status_code
         except RuntimeError:
             return {"error": "rclone is not installed"}, 500
         except subprocess.CalledProcessError as exc:
