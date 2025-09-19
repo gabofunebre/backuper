@@ -1,4 +1,5 @@
 import json
+import json
 import os
 import sys
 import subprocess
@@ -142,6 +143,8 @@ def test_list_rclone_remotes_missing_binary(monkeypatch, app):
 
 def test_validate_drive_token_with_custom_client(monkeypatch, app):
     calls: list[list[str]] = []
+    config_entries: dict[str, dict[str, str]] = {}
+    config_entries: dict[str, dict[str, str]] = {}
 
     class DummyResult:
         stdout = ""
@@ -199,11 +202,15 @@ def test_create_rclone_remote_custom_success(monkeypatch, app):
     calls = []
 
     class DummyResult:
-        stderr = ""
-        stdout = ""
+        def __init__(self, stdout: str = "", stderr: str = "") -> None:
+            self.stdout = stdout
+            self.stderr = stderr
 
     def fake_run(cmd, capture_output, text, check):
         calls.append(cmd)
+        if len(cmd) >= 5 and cmd[3] == "config" and cmd[4] == "dump":
+            payload = {"foo": {"type": "drive", "token": "tok", "scope": "drive"}}
+            return DummyResult(stdout=json.dumps(payload))
         return DummyResult()
 
     monkeypatch.setattr(subprocess, "run", fake_run)
@@ -232,7 +239,15 @@ def test_create_rclone_remote_custom_success(monkeypatch, app):
     assert len(calls) >= 2
     config_path = os.getenv("RCLONE_CONFIG")
     assert calls[0] == ["rclone", "--config", config_path, "listremotes"]
-    cmd = calls[-1]
+    create_cmd = next(
+        cmd
+        for cmd in calls
+        if len(cmd) > 8
+        and cmd[3] == "config"
+        and cmd[4] == "create"
+        and "foo" in cmd
+    )
+    cmd = create_cmd
     assert cmd[0] == "rclone"
     assert "--config" in cmd
     assert cmd[cmd.index("--config") + 1] == config_path
@@ -254,14 +269,29 @@ def test_create_rclone_remote_custom_success(monkeypatch, app):
     assert cmd[cmd.index("client_id") + 1] == "cid"
     assert "client_secret" in cmd
     assert cmd[cmd.index("client_secret") + 1] == "sec"
+    from orchestrator.app import SessionLocal
+    from orchestrator.app.models import RcloneRemote
+
+    with SessionLocal() as db:
+        stored = db.query(RcloneRemote).filter_by(name="foo").one()
+        assert stored.config
+        saved_config = json.loads(stored.config)
+        assert saved_config == {
+            "type": "drive",
+            "token": "tok",
+            "scope": "drive",
+            "client_id": "cid",
+            "client_secret": "sec",
+        }
 
 
 def test_create_rclone_remote_custom_retries_without_no_auto_auth(monkeypatch, app):
     calls = []
 
     class DummyResult:
-        stderr = ""
-        stdout = ""
+        def __init__(self, stdout: str = "", stderr: str = "") -> None:
+            self.stdout = stdout
+            self.stderr = stderr
 
     def fake_run(cmd, capture_output, text, check):
         calls.append(list(cmd))
@@ -269,6 +299,9 @@ def test_create_rclone_remote_custom_retries_without_no_auto_auth(monkeypatch, a
             raise subprocess.CalledProcessError(
                 1, cmd, stderr="Error: unknown flag: --no-auto-auth"
             )
+        if len(cmd) >= 5 and cmd[3] == "config" and cmd[4] == "dump":
+            payload = {"foo": {"type": "drive", "token": "tok", "scope": "drive"}}
+            return DummyResult(stdout=json.dumps(payload))
         return DummyResult()
 
     monkeypatch.setattr(subprocess, "run", fake_run)
@@ -287,9 +320,24 @@ def test_create_rclone_remote_custom_retries_without_no_auto_auth(monkeypatch, a
     assert data["status"] == "ok"
     assert data["name"] == "foo"
     assert "id" in data and isinstance(data["id"], int)
-    assert len(calls) >= 2
-    assert "--no-auto-auth" in calls[1]
-    assert "--no-auto-auth" not in calls[-1]
+    assert len(calls) >= 3
+    create_calls = [
+        cmd
+        for cmd in calls
+        if len(cmd) > 5 and cmd[3] == "config" and cmd[4] == "create"
+    ]
+    assert any("--no-auto-auth" in cmd for cmd in create_calls)
+    assert "--no-auto-auth" not in create_calls[-1]
+    from orchestrator.app import SessionLocal
+    from orchestrator.app.models import RcloneRemote
+
+    with SessionLocal() as db:
+        stored = db.query(RcloneRemote).filter_by(name="foo").one()
+        assert json.loads(stored.config) == {
+            "type": "drive",
+            "token": "tok",
+            "scope": "drive",
+        }
 
 
 def test_create_rclone_remote_shared_success(monkeypatch, app):
@@ -305,6 +353,9 @@ def test_create_rclone_remote_shared_success(monkeypatch, app):
 
         if cmd[-1] == "listremotes":
             return DummyResult(stdout="gdrive:\n")
+        if len(cmd) >= 5 and cmd[3] == "config" and cmd[4] == "dump":
+            payload = {"foo": {"type": "alias", "remote": "gdrive:foo"}}
+            return DummyResult(stdout=json.dumps(payload))
         if "link" in cmd:
             return DummyResult(
                 stdout="https://drive.google.com/drive/folders/abc123\n"
@@ -357,17 +408,22 @@ def test_create_rclone_remote_shared_success(monkeypatch, app):
         assert stored.type == "drive"
         assert stored.route == "gdrive:foo"
         assert stored.share_url == "https://drive.google.com/drive/folders/abc123"
+        assert json.loads(stored.config) == {"type": "alias", "remote": "gdrive:foo"}
 
 
 def test_create_rclone_remote_local_success(monkeypatch, app, tmp_path):
     calls: list[list[str]] = []
 
     class DummyResult:
-        stderr = ""
-        stdout = ""
+        def __init__(self, stdout: str = "", stderr: str = "") -> None:
+            self.stdout = stdout
+            self.stderr = stderr
 
     def fake_run(cmd, capture_output, text, check):
         calls.append(cmd)
+        if len(cmd) >= 5 and cmd[3] == "config" and cmd[4] == "dump":
+            payload = {"localbackup": {"type": "alias", "remote": str(tmp_path / "localbackup")}}
+            return DummyResult(stdout=json.dumps(payload))
         return DummyResult()
 
     monkeypatch.setenv("RCLONE_LOCAL_DIRECTORIES", str(tmp_path))
@@ -390,8 +446,17 @@ def test_create_rclone_remote_local_success(monkeypatch, app, tmp_path):
     assert data["route"] == str(expected_path)
     assert data["share_url"] == str(expected_path)
     assert "id" in data and isinstance(data["id"], int)
-    assert len(calls) >= 1
-    cmd = calls[-1]
+    assert len(calls) >= 2
+    config_path = os.getenv("RCLONE_CONFIG")
+    create_cmd = next(
+        cmd
+        for cmd in calls
+        if len(cmd) > 8
+        and cmd[3] == "config"
+        and cmd[4] == "create"
+        and cmd[6] == "localbackup"
+    )
+    cmd = create_cmd
     config_path = os.getenv("RCLONE_CONFIG")
     assert cmd[:3] == ["rclone", "--config", config_path]
     assert cmd[3:9] == [
@@ -404,6 +469,16 @@ def test_create_rclone_remote_local_success(monkeypatch, app, tmp_path):
     ]
     assert cmd[9] == str(expected_path)
     assert expected_path.is_dir()
+
+    from orchestrator.app import SessionLocal
+    from orchestrator.app.models import RcloneRemote
+
+    with SessionLocal() as db:
+        stored = db.query(RcloneRemote).filter_by(name="localbackup").one()
+        assert json.loads(stored.config) == {
+            "type": "alias",
+            "remote": str(expected_path),
+        }
 
 
 def test_update_rclone_remote_local_success(monkeypatch, app, tmp_path):
@@ -515,6 +590,10 @@ def test_update_rclone_remote_local_success(monkeypatch, app, tmp_path):
         assert stored.type == "local"
         assert stored.route == str(expected_path)
         assert stored.share_url == str(expected_path)
+        assert stored.config
+        config_payload = json.loads(stored.config)
+        assert config_payload.get("type") == "alias"
+        assert config_payload.get("remote") == str(expected_path)
     assert expected_path.is_dir()
 
 
@@ -840,6 +919,183 @@ def test_delete_rclone_remote_not_found(monkeypatch, app):
     assert resp.get_json() == {"error": "remote not found"}
 
 
+def test_restore_persisted_remotes_on_startup(monkeypatch, tmp_path):
+    db_path = tmp_path / "state.db"
+    config_file = tmp_path / "rclone.conf"
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_path}")
+    monkeypatch.setenv("APP_ADMIN_USER", "admin")
+    monkeypatch.setenv("APP_ADMIN_PASS", "secret")
+    monkeypatch.setenv("APP_SECRET_KEY", "key")
+    monkeypatch.setenv("RCLONE_LOCAL_DIRECTORIES", str(tmp_path))
+    monkeypatch.setenv("RCLONE_CONFIG", str(config_file))
+
+    commands: list[list[str]] = []
+    config_entries: dict[str, dict[str, str]] = {}
+
+    class DummyResult:
+        def __init__(self, stdout: str = "", stderr: str = "") -> None:
+            self.stdout = stdout
+            self.stderr = stderr
+
+    def fake_run(cmd, capture_output, text, check):
+        commands.append(list(cmd))
+        if len(cmd) >= 5 and cmd[3] == "config" and cmd[4] == "dump":
+            return DummyResult(stdout=json.dumps(config_entries))
+        if len(cmd) >= 8 and cmd[3] == "config" and cmd[4] == "create":
+            name = cmd[6]
+            remote_type = cmd[7]
+            options: dict[str, str] = {}
+            for idx in range(8, len(cmd), 2):
+                if idx + 1 >= len(cmd):
+                    break
+                options[cmd[idx]] = cmd[idx + 1]
+            config_entries[name] = {"type": remote_type, **options}
+            return DummyResult()
+        if len(cmd) >= 6 and cmd[3] == "config" and cmd[4] == "delete":
+            config_entries.pop(cmd[5], None)
+            return DummyResult()
+        if cmd[-1] == "listremotes":
+            stdout = "".join(f"{name}:\n" for name in config_entries)
+            return DummyResult(stdout=stdout)
+        return DummyResult()
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    app_module = importlib.import_module("orchestrator.app")
+    db_module = importlib.import_module("orchestrator.app.database")
+    models_module = importlib.import_module("orchestrator.app.models")
+    importlib.reload(db_module)
+    importlib.reload(models_module)
+    importlib.reload(app_module)
+    monkeypatch.setattr(app_module, "start_scheduler", lambda: None)
+    monkeypatch.setattr(app_module, "schedule_app_backups", lambda: None)
+    app = app_module.create_app()
+
+    client = app.test_client()
+    client.post("/login", data={"username": "admin", "password": "secret"})
+    resp = client.post(
+        "/rclone/remotes",
+        json={
+            "name": "localbackup",
+            "type": "local",
+            "settings": {"path": str(tmp_path)},
+        },
+    )
+    assert resp.status_code == 201
+    assert "localbackup" in config_entries
+
+    config_entries.clear()
+    commands.clear()
+
+    importlib.reload(db_module)
+    importlib.reload(models_module)
+    importlib.reload(app_module)
+    monkeypatch.setattr(app_module, "start_scheduler", lambda: None)
+    monkeypatch.setattr(app_module, "schedule_app_backups", lambda: None)
+    new_app = app_module.create_app()
+
+    assert "localbackup" in config_entries
+    restore_creates = [
+        cmd
+        for cmd in commands
+        if len(cmd) >= 8
+        and cmd[3] == "config"
+        and cmd[4] == "create"
+        and cmd[6] == "localbackup"
+    ]
+    assert restore_creates
+    assert any(cmd[-1] == "listremotes" for cmd in commands)
+
+    with new_app.app_context():
+        from orchestrator.app import SessionLocal
+        from orchestrator.app.models import RcloneRemote
+
+        with SessionLocal() as db:
+            stored = db.query(RcloneRemote).filter_by(name="localbackup").one()
+            assert stored.config
+
+
+def test_restore_persisted_remotes_backfills_missing_config(monkeypatch, tmp_path):
+    db_path = tmp_path / "state.db"
+    config_file = tmp_path / "rclone.conf"
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_path}")
+    monkeypatch.setenv("APP_ADMIN_USER", "admin")
+    monkeypatch.setenv("APP_ADMIN_PASS", "secret")
+    monkeypatch.setenv("APP_SECRET_KEY", "key")
+    monkeypatch.setenv("RCLONE_CONFIG", str(config_file))
+
+    commands: list[list[str]] = []
+    config_entries = {
+        "legacy": {"type": "alias", "remote": str(tmp_path / "legacy")},
+    }
+
+    class DummyResult:
+        def __init__(self, stdout: str = "", stderr: str = "") -> None:
+            self.stdout = stdout
+            self.stderr = stderr
+
+    def fake_run(cmd, capture_output, text, check):
+        commands.append(list(cmd))
+        if len(cmd) >= 5 and cmd[3] == "config" and cmd[4] == "dump":
+            return DummyResult(stdout=json.dumps(config_entries))
+        if len(cmd) >= 6 and cmd[3] == "config" and cmd[4] == "delete":
+            config_entries.pop(cmd[5], None)
+            return DummyResult()
+        if len(cmd) >= 8 and cmd[3] == "config" and cmd[4] == "create":
+            name = cmd[6]
+            remote_type = cmd[7]
+            options: dict[str, str] = {}
+            for idx in range(8, len(cmd), 2):
+                if idx + 1 >= len(cmd):
+                    break
+                options[cmd[idx]] = cmd[idx + 1]
+            config_entries[name] = {"type": remote_type, **options}
+            return DummyResult()
+        if cmd[-1] == "listremotes":
+            stdout = "".join(f"{name}:\n" for name in config_entries)
+            return DummyResult(stdout=stdout)
+        return DummyResult()
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    app_module = importlib.import_module("orchestrator.app")
+    db_module = importlib.import_module("orchestrator.app.database")
+    models_module = importlib.import_module("orchestrator.app.models")
+    importlib.reload(db_module)
+    importlib.reload(models_module)
+    importlib.reload(app_module)
+    monkeypatch.setattr(app_module, "start_scheduler", lambda: None)
+    monkeypatch.setattr(app_module, "schedule_app_backups", lambda: None)
+    app = app_module.create_app()
+
+    from orchestrator.app import SessionLocal
+    from orchestrator.app.models import RcloneRemote
+
+    with SessionLocal() as db:
+        db.add(RcloneRemote(name="legacy", type="alias", config=None))
+        db.commit()
+
+    commands.clear()
+    app.restore_persisted_remotes()
+
+    assert not any(cmd[3:5] == ["config", "dump"] for cmd in commands)
+    assert not any(
+        len(cmd) >= 9 and cmd[3:9] == [
+            "config",
+            "create",
+            "--non-interactive",
+            "legacy",
+            "alias",
+            "remote",
+        ]
+        for cmd in commands
+    )
+
+    with SessionLocal() as db:
+        stored = db.query(RcloneRemote).filter_by(name="legacy").one()
+        assert stored.config is None
+
+
 def test_browse_sftp_directories_success(monkeypatch, app):
     calls: list[list[str]] = []
 
@@ -948,6 +1204,17 @@ def test_create_sftp_remote_success(monkeypatch, app):
         calls.append(cmd)
         if "obscure" in cmd:
             return DummyResult("obscured-pass\n")
+        if len(cmd) >= 5 and cmd[3] == "config" and cmd[4] == "dump":
+            payload = {
+                "sftpbackup": {
+                    "type": "sftp",
+                    "host": "example.com",
+                    "user": "user",
+                    "pass": "obscured-pass",
+                    "path": "/data/sftpbackup",
+                }
+            }
+            return DummyResult(stdout=json.dumps(payload))
         return DummyResult()
 
     monkeypatch.setattr(subprocess, "run", fake_run)
@@ -990,6 +1257,19 @@ def test_create_sftp_remote_success(monkeypatch, app):
     lsd_cmd = next(cmd for cmd in calls if cmd[3:] == ["lsd", "sftpbackup:"])
     assert mkdir_cmd[0] == "rclone"
     assert lsd_cmd[0] == "rclone"
+
+    from orchestrator.app import SessionLocal
+    from orchestrator.app.models import RcloneRemote
+
+    with SessionLocal() as db:
+        stored = db.query(RcloneRemote).filter_by(name="sftpbackup").one()
+        assert json.loads(stored.config) == {
+            "type": "sftp",
+            "host": "example.com",
+            "user": "user",
+            "pass": "obscured-pass",
+            "path": "/data/sftpbackup",
+        }
 
 
 def test_create_sftp_remote_permission_error(monkeypatch, app):
@@ -1036,17 +1316,31 @@ def test_create_sftp_remote_permission_error(monkeypatch, app):
 
 def test_create_rclone_remote_nested_config_path(monkeypatch, app, tmp_path):
     calls: list[list[str]] = []
+    config_entries: dict[str, dict[str, str]] = {}
     nested_config = tmp_path / "deep" / "nested" / "rclone.conf"
     default_config = tmp_path / "default" / "nested" / "rclone.conf"
     assert not nested_config.parent.exists()
     assert not default_config.parent.exists()
 
     class DummyResult:
-        stderr = ""
-        stdout = ""
+        def __init__(self, stdout: str = "", stderr: str = "") -> None:
+            self.stdout = stdout
+            self.stderr = stderr
 
     def fake_run(cmd, capture_output, text, check):
         calls.append(cmd)
+        if len(cmd) >= 5 and cmd[3] == "config" and cmd[4] == "dump":
+            return DummyResult(stdout=json.dumps(config_entries))
+        if len(cmd) >= 8 and cmd[3] == "config" and cmd[4] == "create":
+            name = cmd[6]
+            remote_type = cmd[7]
+            options: dict[str, str] = {}
+            for idx in range(8, len(cmd), 2):
+                if idx + 1 >= len(cmd):
+                    break
+                options[cmd[idx]] = cmd[idx + 1]
+            config_entries[name] = {"type": remote_type, **options}
+            return DummyResult()
         return DummyResult()
 
     monkeypatch.setattr(subprocess, "run", fake_run)
@@ -1069,10 +1363,27 @@ def test_create_rclone_remote_nested_config_path(monkeypatch, app, tmp_path):
     assert "id" in data and isinstance(data["id"], int)
     assert "route" not in data
     assert nested_config.parent.is_dir()
-    cmd = calls[-1]
-    assert "--config" in cmd
-    config_index = cmd.index("--config")
-    assert cmd[config_index + 1] == str(nested_config)
+    create_cmd = next(
+        cmd
+        for cmd in calls
+        if len(cmd) > 8
+        and cmd[3] == "config"
+        and cmd[4] == "create"
+        and cmd[6] == "foo"
+    )
+    assert "--config" in create_cmd
+    config_index = create_cmd.index("--config")
+    assert create_cmd[config_index + 1] == str(nested_config)
+    from orchestrator.app import SessionLocal
+    from orchestrator.app.models import RcloneRemote
+
+    with SessionLocal() as db:
+        stored = db.query(RcloneRemote).filter_by(name="foo").one()
+        assert json.loads(stored.config) == {
+            "type": "drive",
+            "token": "tok",
+            "scope": "drive",
+        }
 
     calls.clear()
     monkeypatch.delenv("RCLONE_CONFIG", raising=False)
@@ -1093,10 +1404,24 @@ def test_create_rclone_remote_nested_config_path(monkeypatch, app, tmp_path):
     assert "id" in data and isinstance(data["id"], int)
     assert "route" not in data
     assert default_config.parent.is_dir()
-    cmd = calls[-1]
-    assert "--config" in cmd
-    config_index = cmd.index("--config")
-    assert cmd[config_index + 1] == str(default_config)
+    create_cmd = next(
+        cmd
+        for cmd in calls
+        if len(cmd) > 8
+        and cmd[3] == "config"
+        and cmd[4] == "create"
+        and cmd[6] == "bar"
+    )
+    assert "--config" in create_cmd
+    config_index = create_cmd.index("--config")
+    assert create_cmd[config_index + 1] == str(default_config)
+    with SessionLocal() as db:
+        stored = db.query(RcloneRemote).filter_by(name="bar").one()
+        assert json.loads(stored.config) == {
+            "type": "drive",
+            "token": "tok",
+            "scope": "drive",
+        }
 
 
 def test_create_rclone_remote_failure(monkeypatch, app):
@@ -1224,6 +1549,7 @@ def test_create_rclone_remote_invalid_drive_mode(monkeypatch, app):
 
 def test_create_rclone_remote_shared_bootstrap_default_remote(monkeypatch, app):
     calls: list[list[str]] = []
+    config_entries: dict[str, dict[str, str]] = {}
 
     def fake_run(cmd, capture_output, text, check):
         calls.append(cmd)
@@ -1234,7 +1560,20 @@ def test_create_rclone_remote_shared_bootstrap_default_remote(monkeypatch, app):
                 self.stderr = stderr
 
         if cmd[-1] == "listremotes":
-            return DummyResult(stdout="")
+            stdout = "".join(f"{name}:\n" for name in config_entries)
+            return DummyResult(stdout=stdout)
+        if len(cmd) >= 5 and cmd[3] == "config" and cmd[4] == "dump":
+            return DummyResult(stdout=json.dumps(config_entries))
+        if len(cmd) >= 8 and cmd[3] == "config" and cmd[4] == "create":
+            name = cmd[6]
+            remote_type = cmd[7]
+            options: dict[str, str] = {}
+            for idx in range(8, len(cmd), 2):
+                if idx + 1 >= len(cmd):
+                    break
+                options[cmd[idx]] = cmd[idx + 1]
+            config_entries[name] = {"type": remote_type, **options}
+            return DummyResult()
         if "link" in cmd:
             return DummyResult(
                 stdout="https://drive.google.com/drive/folders/new\n"
@@ -1314,6 +1653,12 @@ def test_create_rclone_remote_shared_bootstrap_default_remote(monkeypatch, app):
     link_cmd = next(cmd for cmd in calls if len(cmd) > 3 and cmd[3] == "link")
     assert link_cmd[:3] == ["rclone", "--config", config_path]
     assert "gdrive:foo" in link_cmd
+    from orchestrator.app import SessionLocal
+    from orchestrator.app.models import RcloneRemote
+
+    with SessionLocal() as db:
+        stored = db.query(RcloneRemote).filter_by(name="foo").one()
+        assert json.loads(stored.config) == {"type": "alias", "remote": "gdrive:foo"}
 
 
 def test_create_rclone_remote_shared_missing_default_remote(monkeypatch, app):
