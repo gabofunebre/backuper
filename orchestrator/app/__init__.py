@@ -3,7 +3,6 @@ import json
 import os
 import posixpath
 import shutil
-import re
 import subprocess
 import tempfile
 import uuid
@@ -31,6 +30,10 @@ from orchestrator.scheduler import (
     run_backup,
 )
 from orchestrator.services.client import _normalize_remote
+from orchestrator.local_dirs import (
+    parse_local_directory_config,
+    strip_enclosing_quotes,
+)
 
 
 DEFAULT_RCLONE_CONFIG = "/config/rclone/rclone.conf"
@@ -103,45 +106,13 @@ def create_app() -> Flask:
     admin_pass = os.getenv("APP_ADMIN_PASS")
     app.secret_key = os.getenv("APP_SECRET_KEY", "devkey")
 
-    def _strip_enclosing_quotes(value: str | None) -> str:
-        """Remove matching quotes surrounding *value* if present."""
-
-        if value is None:
-            return ""
-        text = value.strip()
-        if len(text) >= 2 and text[0] == text[-1] and text[0] in {'"', "'"}:
-            text = text[1:-1].strip()
-        return text
-
-    def _parse_directory_config(value: str) -> list[dict[str, str]]:
-        """Parse a delimited list of directories from *value*."""
-
-        entries: list[dict[str, str]] = []
-        if not value:
-            return entries
-        for raw in re.split(r"[;,\n]+", value):
-            item = raw.strip()
-            if not item:
-                continue
-            label_part, sep, path_part = item.partition("|")
-            if sep:
-                cleaned_path = _strip_enclosing_quotes(path_part)
-                cleaned_label = _strip_enclosing_quotes(label_part) or cleaned_path
-            else:
-                cleaned_path = _strip_enclosing_quotes(label_part)
-                cleaned_label = cleaned_path
-            if not cleaned_path:
-                continue
-            entries.append({"label": cleaned_label or cleaned_path, "path": cleaned_path})
-        return entries
-
     def get_local_directories() -> list[dict[str, str]]:
-        return _parse_directory_config(os.getenv("RCLONE_LOCAL_DIRECTORIES", ""))
+        return parse_local_directory_config(os.getenv("RCLONE_LOCAL_DIRECTORIES", ""))
 
     def _ensure_absolute_path(value: str | None) -> str | None:
         if value is None:
             return None
-        candidate = _strip_enclosing_quotes(value)
+        candidate = strip_enclosing_quotes(value)
         if not candidate:
             return None
         candidate = os.path.expanduser(candidate)
@@ -491,15 +462,15 @@ def create_app() -> Flask:
                 raise RemoteOperationError("no local directories configured", 500)
             raw_path_setting = settings.get("path")
             if isinstance(raw_path_setting, str):
-                path = _strip_enclosing_quotes(raw_path_setting)
+                path = strip_enclosing_quotes(raw_path_setting)
             else:
-                path = _strip_enclosing_quotes(str(raw_path_setting or ""))
+                path = strip_enclosing_quotes(str(raw_path_setting or ""))
             if not path:
                 raise RemoteOperationError(
                     "Seleccioná la carpeta local donde guardar los respaldos."
                 )
             available_paths = {
-                _strip_enclosing_quotes((entry.get("path") or ""))
+                strip_enclosing_quotes((entry.get("path") or ""))
                 for entry in directory_entries
             }
             if path not in available_paths:
