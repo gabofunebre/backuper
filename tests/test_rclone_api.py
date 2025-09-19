@@ -673,7 +673,7 @@ def test_create_sftp_remote_success(monkeypatch, app):
         },
     )
     assert resp.status_code == 201
-    assert resp.get_json() == {"status": "ok"}
+    assert resp.get_json() == {"status": "ok", "share_url": "/data"}
     assert len(calls) == 3
     config_cmd, mkdir_cmd, lsd_cmd = calls
     assert config_cmd[3:7] == ["config", "create", "--non-interactive", "sftpbackup"]

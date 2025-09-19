@@ -84,9 +84,20 @@ function resetSftpBrowser(clearSelection = true) {
   if (panel) {
     panel.classList.add('d-none');
   }
-  const list = document.getElementById('sftp-directory-list');
-  if (list) {
-    list.innerHTML = '';
+  const select = document.getElementById('sftp-directory-select');
+  if (select) {
+    select.innerHTML = '';
+    select.disabled = true;
+    const placeholder = document.createElement('option');
+    placeholder.value = '';
+    placeholder.textContent = 'Probá la conexión para listar carpetas';
+    placeholder.disabled = true;
+    placeholder.selected = true;
+    select.appendChild(placeholder);
+  }
+  const openButton = document.getElementById('sftp-open-selected');
+  if (openButton) {
+    openButton.disabled = true;
   }
   const emptyAlert = document.getElementById('sftp-empty');
   if (emptyAlert) {
@@ -100,7 +111,7 @@ function resetSftpBrowser(clearSelection = true) {
   if (upButton) {
     upButton.disabled = true;
   }
-  updateSftpStatus('Completá las credenciales y listá las carpetas disponibles.', 'muted');
+  updateSftpStatus('Completá las credenciales y probá la conexión para ver las carpetas disponibles.', 'muted');
   if (clearSelection) {
     updateSftpSelectedPath('');
   }
@@ -131,15 +142,16 @@ async function fetchSftpDirectories(path) {
 
 function renderSftpBrowser(data) {
   const panel = document.getElementById('sftp-browser-panel');
-  const list = document.getElementById('sftp-directory-list');
+  const select = document.getElementById('sftp-directory-select');
   const emptyAlert = document.getElementById('sftp-empty');
   const currentPathLabel = document.getElementById('sftp-current-path');
   const upButton = document.getElementById('sftp-browser-up');
-  if (!panel || !list || !currentPathLabel) {
+  const openButton = document.getElementById('sftp-open-selected');
+  if (!panel || !select || !currentPathLabel) {
     return;
   }
   panel.classList.remove('d-none');
-  list.innerHTML = '';
+  select.innerHTML = '';
   const directories = Array.isArray(data.directories) ? data.directories : [];
   sftpState.currentPath = normalizeSftpPath(data.current_path);
   sftpState.parentPath = normalizeSftpPath(data.parent_path);
@@ -151,11 +163,27 @@ function renderSftpBrowser(data) {
     if (emptyAlert) {
       emptyAlert.classList.remove('d-none');
     }
+    const option = document.createElement('option');
+    option.value = '';
+    option.textContent = 'No hay subcarpetas disponibles';
+    option.disabled = true;
+    option.selected = true;
+    select.appendChild(option);
+    select.disabled = true;
+    if (openButton) {
+      openButton.disabled = true;
+    }
     return;
   }
   if (emptyAlert) {
     emptyAlert.classList.add('d-none');
   }
+  const placeholder = document.createElement('option');
+  placeholder.value = '';
+  placeholder.textContent = 'Seleccioná una subcarpeta…';
+  placeholder.disabled = true;
+  placeholder.selected = true;
+  select.appendChild(placeholder);
   directories
     .slice()
     .sort((a, b) => a.name.localeCompare(b.name, 'es', { sensitivity: 'base' }))
@@ -163,13 +191,15 @@ function renderSftpBrowser(data) {
       if (!entry || !entry.name || !entry.path) {
         return;
       }
-      const item = document.createElement('button');
-      item.type = 'button';
-      item.className = 'list-group-item list-group-item-action';
-      item.textContent = entry.name;
-      item.dataset.path = entry.path;
-      list.appendChild(item);
+      const option = document.createElement('option');
+      option.value = entry.path;
+      option.textContent = entry.name;
+      select.appendChild(option);
     });
+  select.disabled = false;
+  if (openButton) {
+    openButton.disabled = true;
+  }
 }
 
 async function openSftpPath(path) {
@@ -181,17 +211,18 @@ async function openSftpPath(path) {
   const data = await fetchSftpDirectories(path);
   if (data) {
     renderSftpBrowser(data);
-    updateSftpStatus('Seleccioná la carpeta donde querés guardar los respaldos.', 'muted');
+    updateSftpStatus('Seleccioná una carpeta del menú desplegable o navegá con "Ver subcarpetas".', 'muted');
   }
 }
 
 function initSftpBrowser() {
   resetSftpBrowser(true);
   const browseButton = document.getElementById('sftp-browse');
-  const list = document.getElementById('sftp-directory-list');
+  const directorySelect = document.getElementById('sftp-directory-select');
   const upButton = document.getElementById('sftp-browser-up');
   const useButton = document.getElementById('sftp-use-current');
-  if (!browseButton || !list || !upButton || !useButton) {
+  const openButton = document.getElementById('sftp-open-selected');
+  if (!browseButton || !directorySelect || !upButton || !useButton || !openButton) {
     return;
   }
 
@@ -201,7 +232,7 @@ function initSftpBrowser() {
     const username = document.getElementById('sftp_username')?.value.trim() || '';
     const password = document.getElementById('sftp_password')?.value || '';
     if (!host || !username || !password) {
-      updateSftpStatus('Completá host, usuario y contraseña antes de listar las carpetas.', 'danger');
+      updateSftpStatus('Completá host, usuario y contraseña antes de probar la conexión.', 'danger');
       return;
     }
     if (portValue && !/^\d+$/.test(portValue)) {
@@ -219,7 +250,7 @@ function initSftpBrowser() {
       const data = await fetchSftpDirectories('/');
       if (data) {
         renderSftpBrowser(data);
-        updateSftpStatus('Seleccioná la carpeta donde querés guardar los respaldos.', 'muted');
+        updateSftpStatus('Seleccioná una carpeta del menú desplegable o navegá con "Ver subcarpetas".', 'muted');
       }
     } catch (err) {
       updateSftpStatus('No se pudieron listar las carpetas del servidor SFTP.', 'danger');
@@ -228,17 +259,35 @@ function initSftpBrowser() {
     }
   });
 
-  list.addEventListener('click', async (event) => {
-    const target = event.target instanceof Element ? event.target.closest('button[data-path]') : null;
-    if (!target) {
+  const handleOpenSelected = async () => {
+    if (!directorySelect.value) {
+      updateSftpStatus('Elegí una subcarpeta del menú desplegable para continuar.', 'danger');
       return;
     }
-    const { path } = target.dataset;
-    if (!path) {
-      return;
+    await openSftpPath(directorySelect.value);
+  };
+
+  directorySelect.addEventListener('change', () => {
+    if (openButton) {
+      openButton.disabled = !directorySelect.value;
     }
-    await openSftpPath(path);
   });
+
+  directorySelect.addEventListener('dblclick', async () => {
+    if (!directorySelect.value) {
+      return;
+    }
+    await openSftpPath(directorySelect.value);
+  });
+
+  directorySelect.addEventListener('keydown', async (event) => {
+    if (event.key === 'Enter' && directorySelect.value) {
+      event.preventDefault();
+      await openSftpPath(directorySelect.value);
+    }
+  });
+
+  openButton.addEventListener('click', handleOpenSelected);
 
   upButton.addEventListener('click', async () => {
     if (upButton.disabled) {
@@ -318,14 +367,9 @@ async function loadRemotes() {
     }
     remotes.forEach((entry) => {
       const remote = typeof entry === 'string' ? { name: entry } : entry || {};
-      const remoteData = {
-        name: remote.name || '',
-        type: remote.type || '',
-        share_url: remote.share_url || '',
-      };
-      if (!remoteData.name) {
-        return;
-      }
+      const name = remote.name || '';
+      const shareUrl = remote.share_url || '';
+      const remoteType = (remote.type || '').toLowerCase();
       if (tbody) {
         const tr = document.createElement('tr');
 
@@ -334,14 +378,21 @@ async function loadRemotes() {
         tr.appendChild(nameCell);
 
         const linkCell = document.createElement('td');
-        if (remoteData.share_url) {
-          const anchor = document.createElement('a');
-          anchor.href = remoteData.share_url;
-          anchor.target = '_blank';
-          anchor.rel = 'noopener';
-          anchor.textContent = remoteData.share_url;
-          anchor.classList.add('text-break');
-          linkCell.appendChild(anchor);
+        if (shareUrl) {
+          if (remoteType === 'sftp') {
+            const span = document.createElement('span');
+            span.textContent = shareUrl;
+            span.classList.add('text-break');
+            linkCell.appendChild(span);
+          } else {
+            const anchor = document.createElement('a');
+            anchor.href = shareUrl;
+            anchor.target = '_blank';
+            anchor.rel = 'noopener';
+            anchor.textContent = shareUrl;
+            anchor.classList.add('text-break');
+            linkCell.appendChild(anchor);
+          }
         } else {
           linkCell.textContent = '—';
           linkCell.classList.add('text-muted');

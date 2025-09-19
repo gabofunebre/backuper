@@ -786,29 +786,80 @@ def create_app() -> Flask:
                 existing.type = remote_type
                 existing.share_url = share_url
             else:
-                db.add(RcloneRemote(name=name, type=remote_type, share_url=share_url))
-            db.commit()
-
-        response = {"status": "ok"}
-        if share_url:
-            response["share_url"] = share_url
-        return response, 201
-
-    @app.put("/rclone/remotes/<remote_name>")
-    @login_required
-    def update_rclone_remote(remote_name: str) -> tuple[dict, int]:
-        """Replace an existing rclone remote with updated settings."""
-
-        normalized_name = _normalize_remote_name(remote_name)
-        data = request.get_json(force=True) or {}
-        payload_name = _normalize_remote_name(data.get("name") or normalized_name)
-        remote_type = (data.get("type") or "").strip().lower()
-        if not normalized_name or not remote_type:
-            return {"error": "invalid payload"}, 400
-        if payload_name != normalized_name:
-            return {"error": "remote name mismatch"}, 400
-        allowed_types = {"drive", "onedrive", "sftp", "local"}
-        if remote_type not in allowed_types:
+                if not token:
+                    return {"error": "token is required"}, 400
+                args = [
+                    *base_args,
+                    "drive",
+                    "token",
+                    token,
+                    "scope",
+                    os.getenv("RCLONE_DRIVE_SCOPE", "drive"),
+                    "--no-auto-auth",
+                ]
+                client_id = (settings.get("client_id") or "").strip() or os.getenv(
+                    "RCLONE_DRIVE_CLIENT_ID"
+                )
+                client_secret = (
+                    (settings.get("client_secret") or "").strip()
+                    or os.getenv("RCLONE_DRIVE_CLIENT_SECRET")
+                )
+                if client_id:
+                    args.extend(["client_id", client_id])
+                if client_secret:
+                    args.extend(["client_secret", client_secret])
+        elif remote_type == "local":
+            directories = {entry["path"] for entry in get_local_directories()}
+            if not directories:
+                return {"error": "no local directories configured"}, 500
+            path = (settings.get("path") or "").strip()
+            if not path:
+                return {"error": "path is required"}, 400
+            if path not in directories:
+                return {"error": "invalid path"}, 400
+            args = base_args + ["alias", "remote", path]
+        elif remote_type == "sftp":
+            host = (settings.get("host") or "").strip()
+            username = (settings.get("username") or settings.get("user") or "").strip()
+            password = (settings.get("password") or "").strip()
+            port = (settings.get("port") or "").strip()
+            base_path = (settings.get("base_path") or "").strip()
+            if not host:
+                return {"error": "host is required"}, 400
+            if not username:
+                return {"error": "username is required"}, 400
+            if not password:
+                return {"error": "password is required"}, 400
+            if port and not port.isdigit():
+                return {"error": "invalid port"}, 400
+            if not base_path:
+                return {
+                    "error": "Seleccioná la carpeta del servidor SFTP donde se crearán los respaldos.",
+                }, 400
+            normalized_base = _normalize_sftp_base_path(base_path)
+            share_url = normalized_base
+            try:
+                target_path = _join_sftp_folder(normalized_base, name)
+            except ValueError:
+                return {"error": "El nombre del remote no es válido para crear una carpeta en SFTP."}, 400
+            args = [
+                *base_args,
+                "sftp",
+                "host",
+                host,
+                "user",
+                username,
+            ]
+            if port:
+                args.extend(["port", port])
+            args.extend(["path", target_path, "pass", password])
+            post_config_commands = [
+                ["mkdir", f"{name}:"],
+                ["lsd", f"{name}:"],
+            ]
+            cleanup_remote_on_error = True
+            error_translator = _translate_sftp_error
+        else:
             return {"error": "unsupported remote type"}, 400
 
         settings = data.get("settings") or {}
