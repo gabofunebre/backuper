@@ -1,11 +1,11 @@
 services:
   orchestrator:
     build: .
-    container_name: ${BACKUPER_CONTAINER_NAME:-backuper}
+    container_name: backuper
     env_file:
       - .env
     environment:
-      DATABASE_URL: "${DATABASE_URL:-sqlite:////datosPersistentes/db/apps.db}"
+      DATABASE_URL: "sqlite:////sqlite/db/apps.db"
     volumes:
       - ./datosPersistentes/rcloneConfig:/config/rclone
       - ./datosPersistentes/db:/sqlite/db
