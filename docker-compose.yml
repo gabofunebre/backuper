@@ -6,8 +6,8 @@ services:
       - .env
     volumes:
       - backups:/backups
-      - /datosPersistentes/rcloneConfig:/config/rclone
-      - /datosPersistentes/db:/datosPersistentes/db
+      - ./datosPersistentes/rcloneConfig:/config/rclone
+      - ./datosPersistentes/db:/datosPersistentes/db
     networks:
       - backups_net
       - Backuper_tunn_net
