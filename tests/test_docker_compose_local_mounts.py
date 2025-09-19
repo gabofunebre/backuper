@@ -9,9 +9,6 @@ from pathlib import Path
 
 import pytest
 
-from orchestrator.local_dirs import render_compose_bind_mounts
-
-
 REPO_ROOT = Path(__file__).resolve().parents[1]
 COMPOSE_FILE = REPO_ROOT / "docker-compose.yml"
 EXTERNAL_NETWORK = "Backuper_tunn_net"
@@ -41,16 +38,12 @@ def test_local_directories_are_mounted(tmp_path: Path) -> None:
     local_target = tmp_path / "local-data"
     local_target.mkdir()
 
-    directories_value = f"TestLocal|{local_target}"
-    volume_snippet = render_compose_bind_mounts(directories_value)
-    if not volume_snippet:
-        pytest.skip("no bind mounts were generated")
+    directories_value = str(local_target)
 
     container_name = f"backuper-test-{uuid.uuid4().hex[:10]}"
 
     env_overrides = os.environ.copy()
     env_overrides["RCLONE_LOCAL_DIRECTORIES"] = directories_value
-    env_overrides["RCLONE_LOCAL_DIRECTORIES_VOLUME_MOUNTS"] = volume_snippet
     env_overrides["BACKUPER_CONTAINER_NAME"] = container_name
 
     env_file_path = REPO_ROOT / ".env"

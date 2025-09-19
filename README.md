@@ -34,17 +34,16 @@ backup-orchestrator/
 
 ### ¿Cómo se montan las carpetas locales?
 
-El servicio monta la carpeta indicada por la variable `RCLONE_LOCAL_DIRECTORIES`
+El servicio monta la carpeta indicada por la variable `RCLONE_LOCAL_DIRECTORIES`.
+Si la variable no está presente (o queda vacía en el `.env`), el `docker-compose`
+usa `./datosPersistentes/backups/` del host y la expone dentro del contenedor
+como `/datosPersistentes/backups`.
 
-
-Además podés exponer carpetas locales mediante la variable
-`RCLONE_LOCAL_DIRECTORIES`. Cada entrada se monta como **bind mount** dentro del
-contenedor en la misma ruta que en el host. Por ejemplo,
-`RCLONE_LOCAL_DIRECTORIES=Respaldos|/home/usuario/backups` hace que la carpeta
-`/home/usuario/backups` del host quede disponible dentro del contenedor en la
-misma ruta (`/home/usuario/backups`). La UI mostrará el label opcional
-(`Respaldos`) como descripción para crear remotes de tipo **Local**. Al tratarse
-de bind mounts, los archivos quedan accesibles fuera del contenedor.
+Cuando quieras usar otra ruta, completá `RCLONE_LOCAL_DIRECTORIES` con el camino
+absoluto que prefieras compartir y asegurate de crear el bind mount antes de
+levantar el stack. El helper incluido sigue disponible para generar las entradas
+necesarias a partir de la variable y dejar cada carpeta disponible en la misma
+ruta que en el host.
 
 
 ### ¿Para qué usamos la base de datos?
@@ -79,7 +78,7 @@ RCLONE_DRIVE_CLIENT_ID=tu-client-id.apps.googleusercontent.com
 RCLONE_DRIVE_CLIENT_SECRET=tu-client-secret
 RCLONE_DRIVE_TOKEN={"access_token": "...", "refresh_token": "..."}
 # Carpetas locales disponibles en la UI (separá con `;`, `,` o salto de línea)
-RCLONE_LOCAL_DIRECTORIES=Respaldos|/home/usuario/backups
+RCLONE_LOCAL_DIRECTORIES=/home/usuario/backups
 
 # Opcional: ajustá el scope y los permisos de compartición
 # RCLONE_DRIVE_SCOPE=drive
@@ -95,8 +94,12 @@ RCLONE_LOCAL_DIRECTORIES=Respaldos|/home/usuario/backups
 > docker compose up -d --build
 > ```
 > El comando genera las entradas necesarias para `docker-compose.yml` a partir de
-> `RCLONE_LOCAL_DIRECTORIES` y se asegura de que las carpetas existan en el host
-> antes de montar el contenedor.
+> `RCLONE_LOCAL_DIRECTORIES`, monta cada carpeta en la misma ruta que en el host
+> y se asegura de que existan antes de iniciar el contenedor.
+
+Si agregás varias entradas o labels en `RCLONE_LOCAL_DIRECTORIES`, recordá
+exportar el snippet previo a `docker compose up` para que queden montadas todas
+las rutas configuradas.
 
 `RCLONE_LOCAL_DIRECTORIES` acepta entradas separadas por `;`, `,` o saltos de
 línea. Cada entrada puede incluir un label opcional seguido de `|` (por ejemplo,
