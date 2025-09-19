@@ -71,6 +71,7 @@ def create_app() -> Flask:
         error_translator: Callable[[str], str] | None = None
         drive_mode: str | None = None
         drive_remote_path: str | None = None
+        share_url: str | None = None
 
     class RemoteOperationError(Exception):
         """Raised when a remote operation fails for a known reason."""
@@ -244,6 +245,7 @@ def create_app() -> Flask:
                     "Seleccioná la carpeta del servidor SFTP donde se crearán los respaldos."
                 )
             normalized_base = _normalize_sftp_base_path(base_path)
+            plan.share_url = normalized_base
             try:
                 target_path = _join_sftp_folder(normalized_base, name)
             except ValueError:
@@ -309,7 +311,7 @@ def create_app() -> Flask:
                     error = plan.error_translator(error)
                 raise RemoteOperationError(error) from exc
 
-        share_url = None
+        share_url = plan.share_url
         if plan.drive_mode == "shared" and plan.drive_remote_path:
             try:
                 share_url = _generate_drive_share_link(plan.drive_remote_path)
@@ -786,80 +788,35 @@ def create_app() -> Flask:
                 existing.type = remote_type
                 existing.share_url = share_url
             else:
-                if not token:
-                    return {"error": "token is required"}, 400
-                args = [
-                    *base_args,
-                    "drive",
-                    "token",
-                    token,
-                    "scope",
-                    os.getenv("RCLONE_DRIVE_SCOPE", "drive"),
-                    "--no-auto-auth",
-                ]
-                client_id = (settings.get("client_id") or "").strip() or os.getenv(
-                    "RCLONE_DRIVE_CLIENT_ID"
+                db.add(
+                    RcloneRemote(
+                        name=name,
+                        type=remote_type,
+                        share_url=share_url,
+                    )
                 )
-                client_secret = (
-                    (settings.get("client_secret") or "").strip()
-                    or os.getenv("RCLONE_DRIVE_CLIENT_SECRET")
-                )
-                if client_id:
-                    args.extend(["client_id", client_id])
-                if client_secret:
-                    args.extend(["client_secret", client_secret])
-        elif remote_type == "local":
-            directories = {entry["path"] for entry in get_local_directories()}
-            if not directories:
-                return {"error": "no local directories configured"}, 500
-            path = (settings.get("path") or "").strip()
-            if not path:
-                return {"error": "path is required"}, 400
-            if path not in directories:
-                return {"error": "invalid path"}, 400
-            args = base_args + ["alias", "remote", path]
-        elif remote_type == "sftp":
-            host = (settings.get("host") or "").strip()
-            username = (settings.get("username") or settings.get("user") or "").strip()
-            password = (settings.get("password") or "").strip()
-            port = (settings.get("port") or "").strip()
-            base_path = (settings.get("base_path") or "").strip()
-            if not host:
-                return {"error": "host is required"}, 400
-            if not username:
-                return {"error": "username is required"}, 400
-            if not password:
-                return {"error": "password is required"}, 400
-            if port and not port.isdigit():
-                return {"error": "invalid port"}, 400
-            if not base_path:
-                return {
-                    "error": "Seleccioná la carpeta del servidor SFTP donde se crearán los respaldos.",
-                }, 400
-            normalized_base = _normalize_sftp_base_path(base_path)
-            share_url = normalized_base
-            try:
-                target_path = _join_sftp_folder(normalized_base, name)
-            except ValueError:
-                return {"error": "El nombre del remote no es válido para crear una carpeta en SFTP."}, 400
-            args = [
-                *base_args,
-                "sftp",
-                "host",
-                host,
-                "user",
-                username,
-            ]
-            if port:
-                args.extend(["port", port])
-            args.extend(["path", target_path, "pass", password])
-            post_config_commands = [
-                ["mkdir", f"{name}:"],
-                ["lsd", f"{name}:"],
-            ]
-            cleanup_remote_on_error = True
-            error_translator = _translate_sftp_error
-        else:
+            db.commit()
+
+        response = {"status": "ok"}
+        if share_url:
+            response["share_url"] = share_url
+        return response, 201
+
+    @app.put("/rclone/remotes/<remote_name>")
+    @login_required
+    def update_rclone_remote(remote_name: str) -> tuple[dict, int]:
+        """Update an existing rclone remote."""
+
+        data = request.get_json(force=True) or {}
+        normalized_name = _normalize_remote_name(remote_name)
+        remote_type = (data.get("type") or "").strip().lower()
+        if not normalized_name:
+            return {"error": "remote not found"}, 404
+        if not remote_type:
+            return {"error": "invalid payload"}, 400
+
+        allowed_types = {"drive", "onedrive", "sftp", "local"}
+        if remote_type not in allowed_types:
             return {"error": "unsupported remote type"}, 400
 
         settings = data.get("settings") or {}
@@ -907,6 +864,7 @@ def create_app() -> Flask:
             _delete_remote_safely(backup_name)
             return {"error": message}, 400
 
+        share_url: str | None = None
         try:
             share_url = _execute_remote_plan(normalized_name, plan)
         except RemoteOperationError as exc:
