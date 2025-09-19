@@ -55,6 +55,24 @@ def test_remote_options_local(monkeypatch):
     }
 
 
+def test_remote_options_local_strips_quotes(monkeypatch, tmp_path):
+    base_dir = tmp_path / "quoted"
+    base_dir.mkdir()
+    app, _ = make_app(
+        monkeypatch,
+        RCLONE_LOCAL_DIRECTORIES=f'"{base_dir}"',
+    )
+    client = app.test_client()
+    login(client)
+    resp = client.get("/rclone/remotes/options/local")
+    assert resp.status_code == 200
+    assert resp.get_json() == {
+        "directories": [
+            {"label": str(base_dir), "path": str(base_dir)},
+        ]
+    }
+
+
 def test_remote_options_sftp(monkeypatch):
     app, _ = make_app(monkeypatch)
     client = app.test_client()
@@ -128,6 +146,46 @@ def test_create_local_remote(monkeypatch, tmp_path):
     app, app_module = make_app(
         monkeypatch,
         RCLONE_LOCAL_DIRECTORIES=f"Backups|{base_dir}",
+    )
+    recorded: dict[str, object] = {}
+
+    def fake_run(cmd, **kwargs):
+        recorded["cmd"] = cmd
+        recorded["kwargs"] = kwargs
+        return SimpleNamespace(stdout="", stderr="")
+
+    monkeypatch.setattr(app_module.subprocess, "run", fake_run)
+    client = app.test_client()
+    login(client)
+    payload = {
+        "name": "local1",
+        "type": "local",
+        "settings": {"path": str(base_dir)},
+    }
+    resp = client.post("/rclone/remotes", json=payload)
+    assert resp.status_code == 201
+    data = resp.get_json()
+    assert data["status"] == "ok"
+    assert data["name"] == "local1"
+    expected_path = base_dir / "local1"
+    assert data["route"] == str(expected_path)
+    assert data["share_url"] == str(expected_path)
+    assert "id" in data and isinstance(data["id"], int)
+    cmd = recorded["cmd"]
+    assert cmd[:3] == ["rclone", "--config", "/tmp/test-rclone.conf"]
+    assert "--non-interactive" in cmd
+    assert "alias" in cmd
+    alias_index = cmd.index("alias")
+    assert cmd[alias_index + 1] == "remote"
+    assert cmd[alias_index + 2] == str(expected_path)
+
+
+def test_create_local_remote_with_quoted_directory(monkeypatch, tmp_path):
+    base_dir = tmp_path / "backups"
+    base_dir.mkdir()
+    app, app_module = make_app(
+        monkeypatch,
+        RCLONE_LOCAL_DIRECTORIES=f'Backups|"{base_dir}"',
     )
     recorded: dict[str, object] = {}
 
