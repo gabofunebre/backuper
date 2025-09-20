@@ -17,8 +17,9 @@ def _ensure_directories(paths: Iterable[str]) -> None:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description=(
-            "Generate docker-compose volume entries for the directories listed "
-            "in RCLONE_LOCAL_DIRECTORIES."
+            "Generate docker-compose volume entries for configured local "
+            "directories. Falls back to the default /backupsLocales mount when "
+            "the legacy RCLONE_LOCAL_DIRECTORIES variable is not provided."
         )
     )
     parser.add_argument(
@@ -27,7 +28,8 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         help=(
             "Directories string to parse. Defaults to the value from the "
-            "RCLONE_LOCAL_DIRECTORIES environment variable."
+            "RCLONE_LOCAL_DIRECTORIES environment variable, or the default "
+            "local backups directory if it is unset."
         ),
     )
     parser.add_argument(

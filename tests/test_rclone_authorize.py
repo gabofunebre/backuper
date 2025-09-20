@@ -1,6 +1,7 @@
 import os
 import json
 import sys
+import tempfile
 import importlib
 import subprocess
 from types import SimpleNamespace
@@ -9,12 +10,20 @@ sys.path.append(os.path.dirname(os.path.dirname(__file__)))
 
 
 def make_app(monkeypatch, **extra_env):
+    default_local_dir = extra_env.get("BACKUPER_LOCAL_BACKUPS_DIR")
+    if default_local_dir:
+        os.makedirs(default_local_dir.strip("\"'"), exist_ok=True)
+    else:
+        default_local_dir = os.path.join(tempfile.gettempdir(), "backuper-tests-local")
+        os.makedirs(default_local_dir, exist_ok=True)
+
     base_env = {
         "DATABASE_URL": "sqlite://",
         "APP_ADMIN_USER": "admin",
         "APP_ADMIN_PASS": "secret",
         "APP_SECRET_KEY": "test-key",
         "RCLONE_CONFIG": "/tmp/test-rclone.conf",
+        "BACKUPER_LOCAL_BACKUPS_DIR": default_local_dir,
     }
     for key, value in base_env.items():
         monkeypatch.setenv(key, value)
@@ -37,10 +46,12 @@ def login(client) -> None:
     client.post("/login", data={"username": "admin", "password": "secret"})
 
 
-def test_remote_options_local(monkeypatch):
+def test_remote_options_local(monkeypatch, tmp_path):
+    base_dir = tmp_path / "local"
+    base_dir.mkdir()
     app, _ = make_app(
         monkeypatch,
-        RCLONE_LOCAL_DIRECTORIES="Local A|/data/a;/data/b",
+        BACKUPER_LOCAL_BACKUPS_DIR=str(base_dir),
     )
     client = app.test_client()
     login(client)
@@ -48,8 +59,7 @@ def test_remote_options_local(monkeypatch):
     assert resp.status_code == 200
     assert resp.get_json() == {
         "directories": [
-            {"label": "Local A", "path": "/data/a"},
-            {"label": "/data/b", "path": "/data/b"},
+            {"label": str(base_dir), "path": str(base_dir)},
         ]
     }
 
@@ -59,7 +69,7 @@ def test_remote_options_local_strips_quotes(monkeypatch, tmp_path):
     base_dir.mkdir()
     app, _ = make_app(
         monkeypatch,
-        RCLONE_LOCAL_DIRECTORIES=f'"{base_dir}"',
+        BACKUPER_LOCAL_BACKUPS_DIR=f'"{base_dir}"',
     )
     client = app.test_client()
     login(client)
@@ -144,7 +154,7 @@ def test_create_local_remote(monkeypatch, tmp_path):
     base_dir.mkdir()
     app, app_module = make_app(
         monkeypatch,
-        RCLONE_LOCAL_DIRECTORIES=f"Backups|{base_dir}",
+        BACKUPER_LOCAL_BACKUPS_DIR=str(base_dir),
     )
     commands: list[list[str]] = []
     config_entries: dict[str, dict[str, str]] = {}
@@ -210,7 +220,7 @@ def test_create_local_remote_with_quoted_directory(monkeypatch, tmp_path):
     base_dir.mkdir()
     app, app_module = make_app(
         monkeypatch,
-        RCLONE_LOCAL_DIRECTORIES=f'Backups|"{base_dir}"',
+        BACKUPER_LOCAL_BACKUPS_DIR=f'"{base_dir}"',
     )
     commands: list[list[str]] = []
     config_entries: dict[str, dict[str, str]] = {}
@@ -272,10 +282,12 @@ def test_create_local_remote_with_quoted_directory(monkeypatch, tmp_path):
         }
 
 
-def test_create_local_remote_invalid_path(monkeypatch):
+def test_create_local_remote_invalid_path(monkeypatch, tmp_path):
+    base_dir = tmp_path / "allowed"
+    base_dir.mkdir()
     app, app_module = make_app(
         monkeypatch,
-        RCLONE_LOCAL_DIRECTORIES="Backups|/data/backups",
+        BACKUPER_LOCAL_BACKUPS_DIR=str(base_dir),
     )
     commands: list[list[str]] = []
 

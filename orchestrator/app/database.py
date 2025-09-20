@@ -5,7 +5,7 @@ from sqlalchemy.orm import sessionmaker, declarative_base
 
 
 def _default_database_url() -> str:
-    base_dir = "/datosPersistentes/db"
+    base_dir = "/sqlite/db"
     filename = "apps.db"
     path = os.path.join(base_dir, filename)
     return f"sqlite:////{path.lstrip('/')}"

@@ -31,7 +31,7 @@ from orchestrator.scheduler import (
 )
 from orchestrator.services.client import _normalize_remote
 from orchestrator.local_dirs import (
-    parse_local_directory_config,
+    load_local_directory_entries,
     strip_enclosing_quotes,
 )
 
@@ -107,7 +107,7 @@ def create_app() -> Flask:
     app.secret_key = os.getenv("APP_SECRET_KEY", "devkey")
 
     def get_local_directories() -> list[dict[str, str]]:
-        return parse_local_directory_config(os.getenv("RCLONE_LOCAL_DIRECTORIES", ""))
+        return load_local_directory_entries()
 
     def _ensure_absolute_path(value: str | None) -> str | None:
         if value is None:

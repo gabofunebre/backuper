@@ -29,22 +29,31 @@ def _command_available(command: list[str]) -> bool:
 
 
 @pytest.mark.skipif(shutil.which("docker") is None, reason="docker CLI not available")
-def test_local_directories_are_mounted(tmp_path: Path) -> None:
+def test_local_directories_are_mounted() -> None:
     if not _command_available(["docker", "info"]):
         pytest.skip("docker daemon is not available")
     if not _command_available(["docker", "compose", "version"]):
         pytest.skip("docker compose plugin is not available")
 
-    local_target = tmp_path / "local-data"
-    local_target.mkdir()
+    persist_root = REPO_ROOT / "datosPersistentes"
+    backups_dir = persist_root / "backups"
+    db_dir = persist_root / "db"
+    config_dir = persist_root / "rcloneConfig"
 
-    directories_value = str(local_target)
+    created_root = not persist_root.exists()
+    created_dirs: list[Path] = []
+    for directory in (backups_dir, db_dir, config_dir):
+        if not directory.exists():
+            directory.mkdir(parents=True)
+            created_dirs.append(directory)
 
-    container_name = f"backuper-test-{uuid.uuid4().hex[:10]}"
+    sentinel_name = f"sentinel-{uuid.uuid4().hex}.txt"
+    sentinel_file = backups_dir / sentinel_name
+    sentinel_file.write_text("mounted", encoding="utf-8")
+
+    container_name = "backuper"
 
     env_overrides = os.environ.copy()
-    env_overrides["RCLONE_LOCAL_DIRECTORIES"] = directories_value
-    env_overrides["BACKUPER_CONTAINER_NAME"] = container_name
 
     env_file_path = REPO_ROOT / ".env"
     backup_contents: str | None = None
@@ -56,9 +65,8 @@ def test_local_directories_are_mounted(tmp_path: Path) -> None:
                 "APP_ADMIN_USER=admin",
                 "APP_ADMIN_PASS=admin",
                 "APP_SECRET_KEY=pytest",
-                "APP_PORT=5550",
+                "PORT=5550",
                 "RCLONE_REMOTE=gdrive",
-                f"RCLONE_LOCAL_DIRECTORIES={directories_value}",
             ]
         )
         + "\n",
@@ -116,6 +124,7 @@ def test_local_directories_are_mounted(tmp_path: Path) -> None:
                 "docker compose up failed:\n" f"STDOUT: {up_result.stdout}\nSTDERR: {up_result.stderr}"
             )
 
+        container_path = f"/backupsLocales/{sentinel_name}"
         exec_result = subprocess.run(
             [
                 "docker",
@@ -125,7 +134,7 @@ def test_local_directories_are_mounted(tmp_path: Path) -> None:
                 "-c",
                 (
                     "import os,sys; "
-                    f"sys.exit(0 if os.path.isdir({json.dumps(str(local_target))}) else 1)"
+                    f"sys.exit(0 if os.path.isfile({json.dumps(container_path)}) else 1)"
                 ),
             ],
             text=True,
@@ -163,3 +172,11 @@ def test_local_directories_are_mounted(tmp_path: Path) -> None:
             env_file_path.unlink(missing_ok=True)
         else:
             env_file_path.write_text(backup_contents, encoding="utf-8")
+        sentinel_file.unlink(missing_ok=True)
+        for directory in reversed(created_dirs):
+            shutil.rmtree(directory, ignore_errors=True)
+        if created_root and persist_root.exists():
+            try:
+                persist_root.rmdir()
+            except OSError:
+                pass

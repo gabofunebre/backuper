@@ -40,7 +40,7 @@ def test_default_database_url_points_to_persistent_volume(reload_database):
     parsed = make_url(url)
 
     assert parsed.get_backend_name() == "sqlite"
-    assert parsed.database == "/datosPersistentes/db/apps.db"
+    assert parsed.database == "/sqlite/db/apps.db"
 
 
 def test_existing_sqlite_database_is_reused(tmp_path, reload_database):
