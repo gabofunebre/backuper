@@ -423,7 +423,7 @@ def test_create_rclone_remote_local_success(monkeypatch, app, tmp_path):
             return DummyResult(stdout=json.dumps(payload))
         return DummyResult()
 
-    monkeypatch.setenv("RCLONE_LOCAL_DIRECTORIES", str(tmp_path))
+    monkeypatch.setenv("BACKUPER_LOCAL_BACKUPS_DIR", str(tmp_path))
     monkeypatch.setattr(subprocess, "run", fake_run)
     client = app.test_client()
     client.post("/login", data={"username": "admin", "password": "secret"})
@@ -511,7 +511,7 @@ def test_update_rclone_remote_local_success(monkeypatch, app, tmp_path):
             return DummyResult()
         return DummyResult()
 
-    monkeypatch.setenv("RCLONE_LOCAL_DIRECTORIES", str(tmp_path))
+    monkeypatch.setenv("BACKUPER_LOCAL_BACKUPS_DIR", str(tmp_path))
     monkeypatch.setattr(subprocess, "run", fake_run)
 
     base_folder = tmp_path
@@ -632,7 +632,7 @@ def test_update_rclone_remote_failure_restores_backup(monkeypatch, app, tmp_path
             return DummyResult()
         return DummyResult()
 
-    monkeypatch.setenv("RCLONE_LOCAL_DIRECTORIES", str(tmp_path))
+    monkeypatch.setenv("BACKUPER_LOCAL_BACKUPS_DIR", str(tmp_path))
     monkeypatch.setattr(subprocess, "run", fake_run)
 
     client = app.test_client()
@@ -836,7 +836,7 @@ def test_delete_rclone_remote_local_removes_folder(monkeypatch, app, tmp_path):
     remote_folder = base_folder / "foo"
     remote_folder.mkdir()
     config_entries["foo"]["remote"] = str(remote_folder)
-    monkeypatch.setenv("RCLONE_LOCAL_DIRECTORIES", str(base_folder))
+    monkeypatch.setenv("BACKUPER_LOCAL_BACKUPS_DIR", str(base_folder))
     monkeypatch.setattr(subprocess, "run", fake_run)
 
     from orchestrator.app import SessionLocal
@@ -923,7 +923,7 @@ def test_restore_persisted_remotes_on_startup(monkeypatch, tmp_path):
     monkeypatch.setenv("APP_ADMIN_USER", "admin")
     monkeypatch.setenv("APP_ADMIN_PASS", "secret")
     monkeypatch.setenv("APP_SECRET_KEY", "key")
-    monkeypatch.setenv("RCLONE_LOCAL_DIRECTORIES", str(tmp_path))
+    monkeypatch.setenv("BACKUPER_LOCAL_BACKUPS_DIR", str(tmp_path))
     monkeypatch.setenv("RCLONE_CONFIG", str(config_file))
 
     commands: list[list[str]] = []
