@@ -173,6 +173,20 @@ def test_create_local_remote(monkeypatch, tmp_path):
                 options[cmd[idx]] = cmd[idx + 1]
             config_entries[name] = {"type": remote_type, **options}
             return SimpleNamespace(stdout="", stderr="")
+        if len(cmd) >= 6 and cmd[3] == "config" and cmd[4] == "update":
+            index = 5
+            if cmd[index] == "--non-interactive":
+                index += 1
+            name = cmd[index]
+            index += 1
+            entry = config_entries.get(name, {}).copy()
+            while index + 1 < len(cmd):
+                key = cmd[index]
+                value = cmd[index + 1]
+                entry[key] = value
+                index += 2
+            config_entries[name] = entry
+            return SimpleNamespace(stdout="", stderr="")
         return SimpleNamespace(stdout="", stderr="")
 
     monkeypatch.setattr(app_module.subprocess, "run", fake_run)
@@ -352,8 +366,8 @@ def test_create_sftp_remote_success(monkeypatch):
     data = resp.get_json()
     assert data["status"] == "ok"
     assert data["name"] == "sftp1"
-    assert data["route"] == "/srv/backups"
-    assert data["share_url"] == "/srv/backups"
+    assert data["route"] == "/srv/backups/sftp1"
+    assert data["share_url"] == "/srv/backups/sftp1"
     assert "id" in data and isinstance(data["id"], int)
 
     config_path = "/tmp/test-rclone.conf"
@@ -376,11 +390,18 @@ def test_create_sftp_remote_success(monkeypatch):
     assert "pass" in create_cmd and create_cmd[create_cmd.index("pass") + 1] == "obscured-secret"
     assert "port" in create_cmd and create_cmd[create_cmd.index("port") + 1] == "2222"
     path_index = create_cmd.index("path")
-    assert create_cmd[path_index + 1] == "/srv/backups/sftp1"
+    assert create_cmd[path_index + 1] == "/srv/backups"
+    update_cmd = next(
+        call["cmd"]
+        for call in calls
+        if call["cmd"][3:8]
+        == ["config", "update", "--non-interactive", "sftp1", "path"]
+    )
+    assert update_cmd[-1] == "/srv/backups/sftp1"
     assert any(
         len(call["cmd"]) > 4
         and call["cmd"][:4] == ["rclone", "--config", config_path, "mkdir"]
-        and call["cmd"][4] == "sftp1:"
+        and call["cmd"][4] == "sftp1:sftp1"
         for call in calls
     )
     assert any(

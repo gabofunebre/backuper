@@ -167,6 +167,7 @@ const sftpState = {
   credentials: null,
   currentPath: '/',
   parentPath: '/',
+  selectedBasePath: '',
 };
 
 function toggleRemoteOverlay(show, message = 'Procesando…') {
@@ -202,6 +203,32 @@ function normalizeSftpPath(path) {
   return value || '/';
 }
 
+function getSftpParentPath(path) {
+  const normalized = normalizeSftpPath(path);
+  if (normalized === '/') {
+    return '/';
+  }
+  const segments = normalized.split('/').filter(Boolean);
+  if (!segments.length) {
+    return '/';
+  }
+  segments.pop();
+  if (!segments.length) {
+    return '/';
+  }
+  return `/${segments.join('/')}`;
+}
+
+function sanitizeSftpFolderName(name) {
+  if (!name) return '';
+  let value = name.trim();
+  if (!value) {
+    return '';
+  }
+  value = value.replace(/^\/+/g, '').replace(/\/+$/g, '');
+  return value;
+}
+
 function updateSftpStatus(message, variant = 'muted') {
   const target = document.getElementById('sftp-browser-feedback');
   if (!target) return;
@@ -225,16 +252,27 @@ function updateSftpSelectedPath(path) {
   const input = document.getElementById('sftp_base_path');
   const summary = document.getElementById('sftp-selected-path');
   if (!input || !summary) return;
-  summary.classList.remove('text-success', 'text-muted', 'text-danger');
+  summary.classList.remove('text-success', 'text-muted', 'text-danger', 'text-warning');
   if (!path) {
     input.value = '';
+    sftpState.selectedBasePath = '';
     summary.textContent = 'Todavía no elegiste la carpeta donde se crearán los respaldos.';
     summary.classList.add('text-muted');
     return;
   }
   const normalized = normalizeSftpPath(path);
   input.value = normalized;
-  summary.textContent = `Se va a crear una carpeta con el nombre del remote dentro de ${normalized}.`;
+  sftpState.selectedBasePath = normalized;
+  const nameInput = document.getElementById('remote_name');
+  const folderName = sanitizeSftpFolderName(nameInput ? nameInput.value : '');
+  if (folderName) {
+    const preview = normalized === '/' ? `/${folderName}` : `${normalized}/${folderName}`;
+    summary.textContent = `Se va a crear la carpeta ${preview}.`;
+  } else if (normalized === '/') {
+    summary.textContent = 'Se va a crear una carpeta con el nombre del remote en la raíz del servidor SFTP.';
+  } else {
+    summary.textContent = `Se va a crear una carpeta con el nombre del remote dentro de ${normalized}.`;
+  }
   summary.classList.add('text-success');
 }
 
@@ -476,6 +514,20 @@ function initSftpBrowser() {
       resetSftpBrowser(true);
     });
   });
+
+  const remoteNameInput = document.getElementById('remote_name');
+  if (remoteNameInput) {
+    remoteNameInput.addEventListener('input', () => {
+      const baseInput = document.getElementById('sftp_base_path');
+      if (!baseInput) {
+        return;
+      }
+      const basePath = baseInput.value.trim();
+      if (basePath) {
+        updateSftpSelectedPath(basePath);
+      }
+    });
+  }
 }
 
 function getDriveMode() {
@@ -722,7 +774,8 @@ function startRemoteEdit(remote) {
   const normalizedType = (remote.type || '').toLowerCase();
   const storedRoute = remote.route || remote.share_url || '';
   if (normalizedType === 'sftp' && storedRoute) {
-    updateSftpSelectedPath(storedRoute);
+    const parentPath = getSftpParentPath(storedRoute);
+    updateSftpSelectedPath(parentPath);
   }
   if (normalizedType === 'local') {
     const select = document.getElementById('local_path');
