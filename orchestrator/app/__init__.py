@@ -555,7 +555,6 @@ def create_app() -> Flask:
                     "Seleccioná la carpeta del servidor SFTP donde se crearán los respaldos."
                 )
             normalized_base = _normalize_sftp_base_path(base_path)
-            plan.share_url = normalized_base
             try:
                 target_path = _join_sftp_folder(normalized_base, name)
             except ValueError:
@@ -564,6 +563,7 @@ def create_app() -> Flask:
                 )
             obscured_password = _obscure_rclone_secret(password)
 
+            plan.share_url = target_path
             plan.command = [
                 *base_args,
                 "sftp",
@@ -574,8 +574,20 @@ def create_app() -> Flask:
             ]
             if port:
                 plan.command.extend(["port", port])
-            plan.command.extend(["path", target_path, "pass", obscured_password])
-            plan.post_commands = [["mkdir", f"{name}:"], ["lsd", f"{name}:"]]
+            plan.command.extend(["path", normalized_base, "pass", obscured_password])
+            folder_segment = posixpath.basename(target_path)
+            plan.post_commands = [
+                ["mkdir", f"{name}:{folder_segment}"],
+                [
+                    "config",
+                    "update",
+                    "--non-interactive",
+                    name,
+                    "path",
+                    target_path,
+                ],
+                ["lsd", f"{name}:"]
+            ]
             plan.cleanup_on_error = True
             plan.error_translator = _translate_sftp_error
             config_snapshot: dict[str, str] = {

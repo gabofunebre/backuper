@@ -1232,8 +1232,8 @@ def test_create_sftp_remote_success(monkeypatch, app):
     data = resp.get_json()
     assert data["status"] == "ok"
     assert data["name"] == "sftpbackup"
-    assert data["route"] == "/data"
-    assert data["share_url"] == "/data"
+    assert data["route"] == "/data/sftpbackup"
+    assert data["share_url"] == "/data/sftpbackup"
     assert "id" in data and isinstance(data["id"], int)
 
     config_path = os.getenv("RCLONE_CONFIG")
@@ -1246,9 +1246,15 @@ def test_create_sftp_remote_success(monkeypatch, app):
         cmd for cmd in calls if cmd[3:7] == ["config", "create", "--non-interactive", "sftpbackup"]
     )
     path_index = config_cmd.index("path")
-    assert config_cmd[path_index + 1] == "/data/sftpbackup"
+    assert config_cmd[path_index + 1] == "/data"
     assert config_cmd[config_cmd.index("pass") + 1] == "obscured-pass"
-    mkdir_cmd = next(cmd for cmd in calls if cmd[3:] == ["mkdir", "sftpbackup:"])
+    update_cmd = next(
+        cmd
+        for cmd in calls
+        if cmd[3:8] == ["config", "update", "--non-interactive", "sftpbackup", "path"]
+    )
+    assert update_cmd[-1] == "/data/sftpbackup"
+    mkdir_cmd = next(cmd for cmd in calls if cmd[3:] == ["mkdir", "sftpbackup:sftpbackup"])
     lsd_cmd = next(cmd for cmd in calls if cmd[3:] == ["lsd", "sftpbackup:"])
     assert mkdir_cmd[0] == "rclone"
     assert lsd_cmd[0] == "rclone"
