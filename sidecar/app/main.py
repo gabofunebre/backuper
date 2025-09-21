@@ -2,33 +2,22 @@
 
 from __future__ import annotations
 
-import hashlib
 import hmac
 import os
 import re
-import shutil
-import subprocess
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable, Iterator, Optional
+from typing import Any, Optional
 
 import yaml
 from flask import Flask, Response, jsonify, request, stream_with_context
 
+from .exceptions import ConfigError, StrategyExecutionError, UnauthorizedError
+from .strategies import create_strategy
+from .strategies.base import ArtifactMetadata, BackupStrategy
+
 CONFIG_PATH_ENV = "SIDECAR_CONFIG_PATH"
 DEFAULT_CONFIG_PATH = Path(__file__).resolve().parents[1] / "config" / "config.yaml"
-
-
-class ConfigError(RuntimeError):
-    """Raised when the configuration file is invalid."""
-
-
-class UnauthorizedError(RuntimeError):
-    """Raised when the provided token does not match the expected one."""
-
-
-class StrategyExecutionError(RuntimeError):
-    """Raised when the backup strategy fails to produce an artifact."""
 
 
 @dataclass
@@ -47,17 +36,10 @@ class StrategyArtifactConfig:
 
 
 @dataclass
-class StrategyCommands:
-    pre_backup: list[str]
-    backup: list[str]
-    post_backup: list[str]
-
-
-@dataclass
 class StrategyConfig:
     type: str
-    commands: StrategyCommands
     artifact: StrategyArtifactConfig
+    config: dict[str, Any]
 
 
 @dataclass
@@ -75,16 +57,6 @@ class SecretsConfig:
 @dataclass
 class AppConfig:
     port: int
-
-
-@dataclass
-class ArtifactMetadata:
-    path: Path
-    filename: str
-    size: int
-    checksum: str
-    format: str
-    content_type: str
 
 
 @dataclass
@@ -112,12 +84,6 @@ def _substitute_env_vars(raw_text: str) -> str:
         return os.environ[name]
 
     return _ENV_VAR_PATTERN.sub(replace, raw_text)
-
-
-def _ensure_list(value: Optional[Iterable[str]]) -> list[str]:
-    if not value:
-        return []
-    return [str(item) for item in value]
 
 
 def _to_int(value: object, *, field: str) -> int:
@@ -174,18 +140,17 @@ def _load_strategy(data: dict) -> StrategyConfig:
         raise ConfigError("strategy.artifact.format must be a non-empty string")
     if not isinstance(content_type, str) or not content_type:
         raise ConfigError("strategy.artifact.content_type must be a non-empty string")
-    commands_section = strategy.get("commands") or {}
-    pre = _ensure_list(commands_section.get("pre_backup"))
-    backup = _ensure_list(commands_section.get("backup"))
-    post = _ensure_list(commands_section.get("post_backup"))
+    config_section = strategy.get("config") or {}
+    if not isinstance(config_section, dict):
+        raise ConfigError("strategy.config must be a mapping if provided")
     return StrategyConfig(
         type=str(strategy_type),
-        commands=StrategyCommands(pre_backup=pre, backup=backup, post_backup=post),
         artifact=StrategyArtifactConfig(
             filename=filename,
             format=artifact_format,
             content_type=content_type,
         ),
+        config=config_section,
     )
 
 
@@ -247,74 +212,12 @@ def _extract_bearer_token(header_value: Optional[str]) -> str:
     return token.strip()
 
 
-def _run_commands(commands: Iterable[str], *, workdir: Path, env: dict[str, str]) -> None:
-    for command in commands:
-        if not command.strip():
-            continue
-        try:
-            subprocess.run(
-                command,
-                shell=True,
-                check=True,
-                cwd=str(workdir),
-                env=env,
-            )
-        except subprocess.CalledProcessError as exc:
-            raise StrategyExecutionError(f"Command failed with exit code {exc.returncode}: {command}") from exc
-
-
-def _compute_checksum(path: Path) -> tuple[str, int]:
-    digest = hashlib.sha256()
-    size = 0
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(65536), b""):
-            digest.update(chunk)
-            size += len(chunk)
-    return digest.hexdigest(), size
-
-
-def _execute_strategy(config: SidecarConfig, drive_folder_id: Optional[str]) -> ArtifactMetadata:
-    paths = config.paths
-    paths.workdir.mkdir(parents=True, exist_ok=True)
-    paths.artifacts.mkdir(parents=True, exist_ok=True)
-    if paths.temp_dump.exists():
-        paths.temp_dump.unlink()
-    env = os.environ.copy()
-    env.update(
-        {
-            "SIDE_CAR_WORKDIR": str(paths.workdir),
-            "SIDE_CAR_ARTIFACTS_DIR": str(paths.artifacts),
-            "SIDE_CAR_TEMP_DUMP": str(paths.temp_dump),
-            "SIDE_CAR_STRATEGY": config.strategy.type,
-        }
-    )
-    if drive_folder_id:
-        env["SIDE_CAR_DRIVE_FOLDER_ID"] = drive_folder_id
-    else:
-        env.pop("SIDE_CAR_DRIVE_FOLDER_ID", None)
-    _run_commands(config.strategy.commands.pre_backup, workdir=paths.workdir, env=env)
-    _run_commands(config.strategy.commands.backup, workdir=paths.workdir, env=env)
-    _run_commands(config.strategy.commands.post_backup, workdir=paths.workdir, env=env)
-    if not paths.temp_dump.exists():
-        raise StrategyExecutionError(f"Strategy did not generate expected artifact at {paths.temp_dump}")
-    artifact_path = paths.artifacts / config.strategy.artifact.filename
-    if artifact_path.exists():
-        if artifact_path.is_dir():
-            raise StrategyExecutionError(f"Artifact path points to a directory: {artifact_path}")
-        artifact_path.unlink()
-    try:
-        shutil.move(str(paths.temp_dump), artifact_path)
-    except OSError as exc:
-        raise StrategyExecutionError(f"Unable to move artifact to {artifact_path}: {exc}") from exc
-    checksum, size = _compute_checksum(artifact_path)
-    return ArtifactMetadata(
-        path=artifact_path,
-        filename=config.strategy.artifact.filename,
-        size=size,
-        checksum=checksum,
-        format=config.strategy.artifact.format,
-        content_type=config.strategy.artifact.content_type,
-    )
+def _execute_strategy(
+    config: SidecarConfig, drive_folder_id: Optional[str]
+) -> tuple[ArtifactMetadata, BackupStrategy]:
+    strategy = create_strategy(config.strategy, config.paths)
+    metadata = strategy.prepare(drive_folder_id=drive_folder_id)
+    return metadata, strategy
 
 
 def create_app(*, config: Optional[SidecarConfig] = None, config_path: Optional[os.PathLike[str] | str] = None) -> Flask:
@@ -363,25 +266,26 @@ def create_app(*, config: Optional[SidecarConfig] = None, config_path: Optional[
         _require_token()
         config = app.config["SIDECAR_CONFIG"]
         drive_folder_id = request.args.get("drive_folder_id")
-        metadata = _execute_strategy(config, drive_folder_id)
+        metadata, strategy = _execute_strategy(config, drive_folder_id)
 
-        def generate() -> Iterator[bytes]:
+        def generate():
             try:
-                with metadata.path.open("rb") as handle:
-                    for chunk in iter(lambda: handle.read(65536), b""):
-                        if chunk:
-                            yield chunk
+                for chunk in strategy.stream():
+                    if chunk:
+                        yield chunk
             finally:
                 try:
-                    metadata.path.unlink()
-                except OSError:
+                    strategy.cleanup()
+                except Exception:
                     pass
 
         response = Response(stream_with_context(generate()), mimetype=metadata.content_type)
         response.headers["Content-Disposition"] = f'attachment; filename="{metadata.filename}"'
-        response.headers["Content-Length"] = str(metadata.size)
+        if metadata.size is not None:
+            response.headers["Content-Length"] = str(metadata.size)
         response.headers["X-Backup-Format"] = metadata.format
-        response.headers["X-Checksum-Sha256"] = metadata.checksum
+        if metadata.checksum is not None:
+            response.headers["X-Checksum-Sha256"] = metadata.checksum
         if drive_folder_id:
             response.headers["X-Drive-Folder-Id"] = drive_folder_id
         return response

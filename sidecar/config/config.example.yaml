@@ -2,34 +2,49 @@
 app:
   # Puerto expuesto por el servicio Flask (escucha en 0.0.0.0)
   port: ${PORT:-8000}
+
 capabilities:
   # Versión del contrato soportado por el sidecar
   version: v1
-  # Tipos de respaldo soportados por la estrategia
+  # Tipos de respaldo que esta instancia puede producir
   types:
-    - filesystem
+    - database
   # Estimaciones opcionales consumidas por el orquestador
   est_seconds: 120
   est_size: 104857600
+
 strategy:
-  # Tipo de estrategia a ejecutar (filesystem, postgres, mysql, etc.)
-  type: ${SIDECAR_STRATEGY_TYPE:-filesystem}
+  # Tipo de estrategia: database_dump | file_archive | custom
+  type: ${SIDECAR_STRATEGY_TYPE:-database_dump}
   artifact:
-    filename: backup.tar.gz
-    format: tar.gz
-    content_type: application/octet-stream
-  commands:
-    pre_backup:
-      - mkdir -p "$SIDE_CAR_ARTIFACTS_DIR"
-    backup:
-      - "printf 'contenido de respaldo' > \"$SIDE_CAR_TEMP_DUMP\""
-    post_backup:
-      - echo "Limpieza tras el respaldo"
+    filename: backup.sql.gz
+    format: postgres-custom
+    content_type: application/gzip
+  config:
+    # Comandos opcionales previos al respaldo (montar credenciales, limpiar temporales, etc.)
+    pre:
+      - mkdir -p "$SIDE_CAR_WORKDIR/tmp"
+    # Comando principal que genera el dump (stdout se guarda automáticamente si capture_stdout=true)
+    command: |
+      pg_dump --dbname="${DATABASE_URL}" --format=custom
+    capture_stdout: true
+    # Comandos opcionales posteriores al dump
+    post:
+      - echo "Dump generado"
+    # Variables de entorno extra disponibles durante los comandos
+    env:
+      PGPASSWORD: ${DATABASE_PASSWORD}
+    # Directorio de trabajo (opcional). Por defecto se usa paths.workdir
+    # workdir: /var/lib/my-app
+
 paths:
-  workdir: /tmp/sidecar
-  artifacts: /tmp/sidecar/artifacts
-  temp_dump: /tmp/sidecar/dump.tmp
+  # Directorio de trabajo donde se ejecutan los comandos
+  workdir: /var/lib/sidecar/workdir
+  # Carpeta donde se moverá el artefacto final antes de exponerlo
+  artifacts: /var/lib/sidecar/artifacts
+  # Ruta temporal utilizada por estrategias basadas en archivos
+  temp_dump: /var/lib/sidecar/tmp/dump.tmp
+
 secrets:
-  database_url: ${DATABASE_URL}
-  ssh_private_key: ${SSH_PRIVATE_KEY}
+  # Token compartido con el orquestador (se injecta vía entorno)
   api_token: ${BACKUP_API_TOKEN}

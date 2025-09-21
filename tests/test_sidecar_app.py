@@ -44,11 +44,12 @@ def _build_config(tmp_path: Path, *, produce_artifact: bool = True) -> dict:
     workdir = tmp_path / "workdir"
     artifacts = tmp_path / "artifacts"
     temp_dump = tmp_path / "dump.bin"
-    backup_command = (
-        "printf \"payload:$SIDE_CAR_DRIVE_FOLDER_ID\" > \"$SIDE_CAR_TEMP_DUMP\""
-        if produce_artifact
-        else "rm -f \"$SIDE_CAR_TEMP_DUMP\""
-    )
+    if produce_artifact:
+        command = "printf 'payload:%s' \"$SIDE_CAR_DRIVE_FOLDER_ID\""
+        capture_stdout = True
+    else:
+        command = "rm -f \"$SIDE_CAR_TEMP_DUMP\""
+        capture_stdout = False
     return {
         "app": {"port": 9000},
         "capabilities": {
@@ -58,16 +59,17 @@ def _build_config(tmp_path: Path, *, produce_artifact: bool = True) -> dict:
             "est_size": 2048,
         },
         "strategy": {
-            "type": "filesystem",
+            "type": "custom",
             "artifact": {
                 "filename": "my-backup.bin",
                 "format": "binary",
                 "content_type": "application/octet-stream",
             },
-            "commands": {
-                "pre_backup": ["mkdir -p \"$SIDE_CAR_ARTIFACTS_DIR\""],
-                "backup": [backup_command],
-                "post_backup": ["echo done"],
+            "config": {
+                "pre": ["mkdir -p \"$SIDE_CAR_ARTIFACTS_DIR\""],
+                "command": command,
+                "post": ["echo done"],
+                "capture_stdout": capture_stdout,
             },
         },
         "paths": {
