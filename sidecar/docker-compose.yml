@@ -1,0 +1,26 @@
+version: "3.9"
+
+services:
+  app:
+    image: alpine:3.18
+    command: ["sh", "-c", "while true; do sleep 3600; done"]
+    networks:
+      - app_internal
+
+  sidecar:
+    image: ghcr.io/example/backuper-sidecar:latest
+    depends_on:
+      - app
+    env_file:
+      - .env
+    volumes:
+      - ./config:/etc/sidecar:ro
+    networks:
+      - app_internal
+      - backups_net
+
+networks:
+  backups_net:
+    external: true
+  app_internal:
+    internal: true

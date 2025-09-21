@@ -1,0 +1,19 @@
+# Plantilla de configuración para el sidecar de backups
+strategy:
+  # Tipo de estrategia a ejecutar (filesystem, postgres, mysql, etc.)
+  type: ${SIDECAR_STRATEGY_TYPE:-filesystem}
+  commands:
+    pre_backup:
+      - echo "Preparando entorno de backup"
+    backup:
+      - echo "Ejecutando comando principal de respaldo"
+    post_backup:
+      - echo "Limpieza tras el respaldo"
+paths:
+  workdir: /tmp/sidecar
+  artifacts: /tmp/sidecar/artifacts
+  temp_dump: /tmp/sidecar/dump.tmp
+secrets:
+  database_url: ${DATABASE_URL}
+  ssh_private_key: ${SSH_PRIVATE_KEY}
+  api_token: ${BACKUP_API_TOKEN}
