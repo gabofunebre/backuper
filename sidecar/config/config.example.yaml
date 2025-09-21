@@ -1,12 +1,28 @@
 # Plantilla de configuración para el sidecar de backups
+app:
+  # Puerto expuesto por el servicio Flask (escucha en 0.0.0.0)
+  port: ${PORT:-8000}
+capabilities:
+  # Versión del contrato soportado por el sidecar
+  version: v1
+  # Tipos de respaldo soportados por la estrategia
+  types:
+    - filesystem
+  # Estimaciones opcionales consumidas por el orquestador
+  est_seconds: 120
+  est_size: 104857600
 strategy:
   # Tipo de estrategia a ejecutar (filesystem, postgres, mysql, etc.)
   type: ${SIDECAR_STRATEGY_TYPE:-filesystem}
+  artifact:
+    filename: backup.tar.gz
+    format: tar.gz
+    content_type: application/octet-stream
   commands:
     pre_backup:
-      - echo "Preparando entorno de backup"
+      - mkdir -p "$SIDE_CAR_ARTIFACTS_DIR"
     backup:
-      - echo "Ejecutando comando principal de respaldo"
+      - "printf 'contenido de respaldo' > \"$SIDE_CAR_TEMP_DUMP\""
     post_backup:
       - echo "Limpieza tras el respaldo"
 paths:
